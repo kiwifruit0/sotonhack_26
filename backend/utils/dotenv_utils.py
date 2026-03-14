@@ -20,3 +20,21 @@ def get_mongo_uri():
     _load_env()
     MONGO_URI = os.getenv("MONGO_URI")
     return MONGO_URI
+
+
+def get_supabase_url():
+    _load_env()
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    return SUPABASE_URL
+
+
+def get_supabase_service_role_key():
+    _load_env()
+    SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    return SUPABASE_SERVICE_ROLE_KEY
+
+
+def get_supabase_storage_bucket():
+    _load_env()
+    SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET")
+    return SUPABASE_STORAGE_BUCKET
