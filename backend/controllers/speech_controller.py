@@ -11,7 +11,7 @@ elevenlabs = ElevenLabs(
 client = genai.Client()
 MODEL_ID = "gemini-2.5-flash-lite"
 
-def output_text(user_id, text_contents):
+def output_speech(user_id, text_contents):
     audio = elevenlabs.text_to_speech.convert(
         text=text_contents,
         voice_id="JBFqnCBsd6RMkjVDRZzb",
