@@ -1,12 +1,11 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 
 
 class User(BaseModel):
     username: str
-    email: str
     avatarUrl: Optional[str]
     interestIds: List[str] = []
     voiceId: Optional[str]
@@ -35,3 +34,11 @@ class DailyNote(BaseModel):
     audioUrl: str
     durationSec: int
     createdAt: datetime
+
+
+FriendshipStatus = Literal["accepted", "pending"]
+
+
+class FriendshipRequest(BaseModel):
+    requestingUsername: str
+    incomingUsername: str

@@ -6,9 +6,10 @@ from uuid import uuid4
 from bson import ObjectId
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
+from pymongo.errors import DuplicateKeyError
 
-from ..models.models import DailyNote, ForumAnswer, ForumPost, User
-from ..utils.database import daily_notes, forum_answers, forum_posts, users
+from ..models.models import DailyNote, ForumAnswer, ForumPost, FriendshipRequest, User
+from ..utils.database import daily_notes, forum_answers, forum_posts, friendships, users
 from ..utils.supabase_storage import (
     SupabaseStorageError,
     create_storage_signed_url,
@@ -71,13 +72,35 @@ async def _read_audio_file(audio_file: UploadFile) -> tuple[str, bytes]:
     return content_type, file_bytes
 
 
+async def _get_user_by_username(username: str, field_name: str) -> dict[str, Any]:
+    normalized_username = username.strip()
+    if not normalized_username:
+        raise HTTPException(status_code=400, detail=f"{field_name} cannot be empty")
+
+    user = await users.find_one({"username": normalized_username})
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"{field_name} user not found")
+
+    return user
+
+
+def _friend_pair_key(first_id: ObjectId, second_id: ObjectId) -> str:
+    return ":".join(sorted([str(first_id), str(second_id)]))
+
+
 @router.post("/users")
 async def create_user(user: User):
     payload = user.model_dump()
+    payload["username"] = user.username.strip()
+    if not payload["username"]:
+        raise HTTPException(status_code=400, detail="username cannot be empty")
     payload["interestIds"] = [
         _parse_object_id(interest_id, "interestId") for interest_id in user.interestIds
     ]
-    result = await users.insert_one(payload)
+    try:
+        result = await users.insert_one(payload)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="username already exists") from exc
     created_user = await users.find_one({"_id": result.inserted_id})
     return _serialize_document(created_user)
 
@@ -92,6 +115,143 @@ async def get_user(user_id: str):
     object_id = _parse_object_id(user_id, "user_id")
     user = await users.find_one({"_id": object_id})
     return _serialize_document(user)
+
+
+@router.post("/friendships/request")
+async def send_friend_request(friend_request: FriendshipRequest):
+    requesting_user = await _get_user_by_username(
+        friend_request.requestingUsername, "requestingUsername"
+    )
+    incoming_user = await _get_user_by_username(
+        friend_request.incomingUsername, "incomingUsername"
+    )
+
+    requesting_user_id = requesting_user["_id"]
+    incoming_user_id = incoming_user["_id"]
+    if requesting_user_id == incoming_user_id:
+        raise HTTPException(status_code=400, detail="Users cannot friend themselves")
+
+    pair_key = _friend_pair_key(requesting_user_id, incoming_user_id)
+    existing_friendship = await friendships.find_one({"friendPairKey": pair_key})
+    if existing_friendship is not None:
+        if existing_friendship.get("status") == "accepted":
+            raise HTTPException(status_code=409, detail="Users are already friends")
+        if existing_friendship.get("requestingFriendId") == requesting_user_id:
+            raise HTTPException(
+                status_code=409, detail="Friend request already pending"
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="Incoming friend request already pending; accept or deny it",
+        )
+
+    payload = {
+        "requestingFriendId": requesting_user_id,
+        "incomingFriendId": incoming_user_id,
+        "friendPairKey": pair_key,
+        "status": "pending",
+        "createdAt": datetime.now(timezone.utc),
+    }
+    try:
+        result = await friendships.insert_one(payload)
+    except DuplicateKeyError as exc:
+        raise HTTPException(
+            status_code=409, detail="Friend request already exists"
+        ) from exc
+    created_friendship = await friendships.find_one({"_id": result.inserted_id})
+    return _serialize_document(created_friendship)
+
+
+@router.post("/friendships/accept")
+async def accept_friend_request(friend_request: FriendshipRequest):
+    requesting_user = await _get_user_by_username(
+        friend_request.requestingUsername, "requestingUsername"
+    )
+    incoming_user = await _get_user_by_username(
+        friend_request.incomingUsername, "incomingUsername"
+    )
+
+    requesting_user_id = requesting_user["_id"]
+    incoming_user_id = incoming_user["_id"]
+    if requesting_user_id == incoming_user_id:
+        raise HTTPException(status_code=400, detail="Users cannot friend themselves")
+
+    friendship = await friendships.find_one(
+        {
+            "requestingFriendId": requesting_user_id,
+            "incomingFriendId": incoming_user_id,
+            "status": "pending",
+        }
+    )
+    if friendship is None:
+        raise HTTPException(status_code=404, detail="Pending friend request not found")
+
+    await friendships.update_one(
+        {"_id": friendship["_id"]},
+        {"$set": {"status": "accepted", "updatedAt": datetime.now(timezone.utc)}},
+    )
+    updated_friendship = await friendships.find_one({"_id": friendship["_id"]})
+    return _serialize_document(updated_friendship)
+
+
+@router.post("/friendships/deny")
+async def deny_friend_request(friend_request: FriendshipRequest):
+    requesting_user = await _get_user_by_username(
+        friend_request.requestingUsername, "requestingUsername"
+    )
+    incoming_user = await _get_user_by_username(
+        friend_request.incomingUsername, "incomingUsername"
+    )
+
+    requesting_user_id = requesting_user["_id"]
+    incoming_user_id = incoming_user["_id"]
+    if requesting_user_id == incoming_user_id:
+        raise HTTPException(status_code=400, detail="Users cannot friend themselves")
+
+    friendship = await friendships.find_one(
+        {
+            "requestingFriendId": requesting_user_id,
+            "incomingFriendId": incoming_user_id,
+            "status": "pending",
+        }
+    )
+    if friendship is None:
+        raise HTTPException(status_code=404, detail="Pending friend request not found")
+
+    await friendships.delete_one({"_id": friendship["_id"]})
+    return {"message": "Friend request denied"}
+
+
+@router.get("/users/{username}/friends")
+async def get_user_friends(username: str):
+    user = await _get_user_by_username(username, "username")
+    user_id = user["_id"]
+
+    friend_ids: set[ObjectId] = set()
+    async for friendship in friendships.find(
+        {
+            "status": "accepted",
+            "$or": [
+                {"requestingFriendId": user_id},
+                {"incomingFriendId": user_id},
+            ],
+        }
+    ):
+        requesting_friend_id = friendship["requestingFriendId"]
+        incoming_friend_id = friendship["incomingFriendId"]
+        friend_ids.add(
+            incoming_friend_id
+            if requesting_friend_id == user_id
+            else requesting_friend_id
+        )
+
+    if not friend_ids:
+        return []
+
+    return [
+        _serialize_document(friend)
+        async for friend in users.find({"_id": {"$in": list(friend_ids)}})
+    ]
 
 
 @router.post("/daily-notes")
@@ -142,7 +302,9 @@ async def upload_daily_note_audio(
     audio_path = f"daily-notes/{user_id}/{uuid4().hex}{_audio_extension(audio_file)}"
 
     try:
-        upload_result = await upload_storage_object(audio_path, file_bytes, content_type)
+        upload_result = await upload_storage_object(
+            audio_path, file_bytes, content_type
+        )
     except SupabaseStorageError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -254,16 +416,22 @@ async def upload_forum_answer_audio(
         try:
             parsed_metadata = json.loads(transcript_meta)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="transcript_meta must be JSON") from exc
+            raise HTTPException(
+                status_code=400, detail="transcript_meta must be JSON"
+            ) from exc
         if not isinstance(parsed_metadata, dict):
-            raise HTTPException(status_code=400, detail="transcript_meta must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="transcript_meta must be a JSON object"
+            )
         metadata = parsed_metadata
 
     content_type, file_bytes = await _read_audio_file(audio_file)
     audio_path = f"forum-answers/{post_id}/{uuid4().hex}{_audio_extension(audio_file)}"
 
     try:
-        upload_result = await upload_storage_object(audio_path, file_bytes, content_type)
+        upload_result = await upload_storage_object(
+            audio_path, file_bytes, content_type
+        )
     except SupabaseStorageError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

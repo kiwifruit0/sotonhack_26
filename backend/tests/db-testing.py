@@ -43,7 +43,6 @@ async def test_mongodb_read_write() -> None:
     run_id = uuid4().hex
     user_payload = {
         "username": f"dbtest-{run_id[:8]}",
-        "email": f"dbtest-{run_id[:8]}@example.com",
         "avatarUrl": None,
         "interestIds": [],
         "voiceId": f"voice-{run_id[:12]}",
