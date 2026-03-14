@@ -1,8 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import test_router
-from .test.dotenv_test import print_dotenv
+from .routers import db_router, test_router
 
 app = FastAPI()
 
@@ -16,5 +15,4 @@ app.add_middleware(
 
 # routers
 app.include_router(test_router.router, prefix="/test")
-
-print_dotenv()
+app.include_router(db_router.router, prefix="/db")
