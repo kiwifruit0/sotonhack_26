@@ -9,7 +9,7 @@ elevenlabs = ElevenLabs(
   api_key=get_elevenlabs_key()
 )
 client = genai.Client()
-MODEL_ID = "gemini-2.5-flash"
+MODEL_ID = "gemini-2.5-flash-lite"
 
 def output_text(user_id, text_contents):
     audio = elevenlabs.text_to_speech.convert(
