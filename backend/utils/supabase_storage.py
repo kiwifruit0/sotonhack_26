@@ -85,4 +85,10 @@ async def create_storage_signed_url(storage_path: str, expires_in: int = 3600) -
 
     if signed_url.startswith("http"):
         return signed_url
-    return f"{supabase_url}{signed_url}"
+
+    # Supabase may return a path beginning with /object/sign/... which still needs
+    # the /storage/v1 prefix when converted to an absolute URL.
+    normalized = signed_url if signed_url.startswith("/") else f"/{signed_url}"
+    if normalized.startswith("/object/"):
+        normalized = f"/storage/v1{normalized}"
+    return f"{supabase_url}{normalized}"

@@ -8,7 +8,7 @@ if not MONGO_URI:
 
 client = AsyncIOMotorClient(MONGO_URI)
 
-db = client["audio_social"]
+db = client["sotonhack"]
 
 users = db.users
 interests = db.interests
