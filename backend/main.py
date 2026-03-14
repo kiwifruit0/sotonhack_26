@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import test_router
+from .test.dotenv_test import print_dotenv
 
 app = FastAPI()
 
@@ -15,3 +16,5 @@ app.add_middleware(
 
 # routers
 app.include_router(test_router.router, prefix="/test")
+
+print_dotenv()
