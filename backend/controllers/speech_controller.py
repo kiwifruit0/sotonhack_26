@@ -34,7 +34,7 @@ def output_text(user_id, text_contents):
 #     return transcription
 
 
-async def call_gemini(prompt: str) -> str:
+async def call_gemini(prompt):
     """Helper to handle the API call and basic error checking."""
     try:
         response = client.models.generate_content(
