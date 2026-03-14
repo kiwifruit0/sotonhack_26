@@ -6,9 +6,10 @@ import { Torus, Sparkles, MeshDistortMaterial, Float, Environment, Html } from '
 import { EffectComposer, Vignette } from '@react-three/postprocessing';
 import { Mic, Menu, Users, X, ChevronRight, MessageSquare } from 'lucide-react';
 import ForceGraph3D from 'react-force-graph-3d';
+import { useConversation } from '@elevenlabs/react';
 
 /* Prerequisites:
-  npm install framer-motion three @react-three/fiber @react-three/drei lucide-react @react-three/postprocessing react-force-graph-3d
+  npm install framer-motion three @react-three/fiber @react-three/drei lucide-react @react-three/postprocessing react-force-graph-3d @elevenlabs/react
 */
 
 // --- 1. Magnetic Interactive Component ---
@@ -34,7 +35,6 @@ const MagneticButton = ({ children, onClick, className, ariaLabel, isActive, hov
     const middleX = clientX - (left + width / 2);
     const middleY = clientY - (top + height / 2);
     
-    // Reduced the magnetic pull strength from 0.3 to 0.1 for a more subtle effect
     x.set(middleX * 0.1); 
     y.set(middleY * 0.1);
   };
@@ -64,7 +64,7 @@ const MagneticButton = ({ children, onClick, className, ariaLabel, isActive, hov
 };
 
 // --- 2. 3D Component: Parallax & Reactive Audio Ring ---
-const ReactiveAudioRing = ({ isListening }) => {
+const ReactiveAudioRing = ({ isListening, volume = 0 }) => {
   const groupRef = useRef();
   const outerRingRef = useRef();
   const middleRingRef = useRef();
@@ -85,6 +85,7 @@ const ReactiveAudioRing = ({ isListening }) => {
 
   useFrame((state, delta) => {
     const elapsedTime = state.clock.getElapsedTime();
+    const voiceBoost = volume * 1.5; // Scale the ring based on ElevenLabs volume
     
     const targetX = pointerActive.current ? (state.pointer.x * Math.PI) / 6 : Math.sin(elapsedTime * 0.5) * 0.1;
     const targetY = pointerActive.current ? (state.pointer.y * Math.PI) / 6 : Math.cos(elapsedTime * 0.5) * 0.1;
@@ -96,13 +97,13 @@ const ReactiveAudioRing = ({ isListening }) => {
       groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, targetZ, 3, delta);
     }
 
-    const targetDistort = isListening ? 0.8 : 0.1;
-    const targetSpeed = isListening ? 6 : 1;
+    const targetDistort = isListening ? 0.8 + (voiceBoost * 0.5) : 0.1;
+    const targetSpeed = isListening ? 6 + (voiceBoost * 2) : 1;
     const basePulse = isListening ? Math.sin(elapsedTime * 8) * 0.04 : Math.sin(elapsedTime * 2) * 0.01;
     
-    const targetOuterScale = 1 + basePulse;
-    const targetMiddleScale = isListening ? 1.1 : 0.95;
-    const targetInnerScale = isListening ? 0.8 : 0.9;
+    const targetOuterScale = (1 + basePulse) + voiceBoost;
+    const targetMiddleScale = isListening ? 1.1 + (voiceBoost * 0.5) : 0.95;
+    const targetInnerScale = isListening ? 0.8 - (voiceBoost * 0.2) : 0.9;
     
     if (materialRef.current) {
       materialRef.current.distort = THREE.MathUtils.damp(materialRef.current.distort, targetDistort, 4, delta);
@@ -314,9 +315,17 @@ const SetupScreen = ({ onComplete }) => {
 const App = () => {
   const [appState, setAppState] = useState('booting'); 
   const [activeTab, setActiveTab] = useState('voice'); 
-  const [isListening, setIsListening] = useState(false);
   const [isFriendsListOpen, setIsFriendsListOpen] = useState(false);
   const [selectedFriendId, setSelectedFriendId] = useState(null);
+  const [transcript, setTranscript] = useState("");
+
+  // ElevenLabs Conversation Hook
+  const conversation = useConversation({
+    onMessage: (message) => {
+      if (message.text) setTranscript(message.text);
+    },
+    onError: (error) => console.error('ElevenLabs SDK Error:', error),
+  });
 
   const graphData = useMemo(() => {
     const nodes = [...Array(30).keys()].map(i => ({ 
@@ -339,16 +348,88 @@ const App = () => {
     return () => clearTimeout(timer);
   }, []);
 
-  const toggleListening = useCallback(() => {
-    if (activeTab !== 'voice') return;
-    setIsListening(prev => {
-      const newState = !prev;
-      if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
-        window.navigator.vibrate(newState ? [50, 50, 50] : 50); 
+  // 1. Add these refs at the top of your App component to track recording state
+const mediaRecorderRef = useRef(null);
+const audioChunksRef = useRef([]);
+
+const isListening = conversation.status === 'connected';
+
+const toggleListening = useCallback(async () => {
+  console.log("API key:", import.meta.env.VITE_ELEVENLABS_API_KEY);
+  console.log("toggleListening called, isListening:", isListening);
+  
+  if (isListening) {
+    await conversation.endSession();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  } else {
+    try {
+      console.log("1. Fetching signed URL..."); // 👈
+      const response = await fetch('http://127.0.0.1:8000/envs/elevenlabs');
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || "Backend failed");
       }
-      return newState;
-    });
-  }, [activeTab]);
+      const data = await response.json();
+      console.log("2. Got signed URL:", data); // 👈
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log("3. Got microphone stream"); // 👈
+
+      audioChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      
+        try {
+          const formData = new FormData();
+          formData.append('file', audioBlob, 'recording.webm'); // 👈 'file' not 'audio'
+          formData.append('model_id', 'scribe_v1');
+      
+          const sttResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+            method: 'POST',
+            headers: {
+              'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY,
+            },
+            body: formData,
+          });
+      
+          if (!sttResponse.ok) {
+            const errData = await sttResponse.json();
+            console.error("STT error details:", errData); // 👈 log the actual error message
+            throw new Error("STT request failed");
+          }
+      
+          const sttData = await sttResponse.json();
+          console.log("User said:", sttData.text);
+          setTranscript(sttData.text);
+      
+        } catch (err) {
+          console.error("Transcription error:", err);
+        }
+      };
+
+
+
+      mediaRecorder.start();
+      console.log("4. MediaRecorder started"); // 👈
+      
+      await conversation.startSession({ signedUrl: data.signedUrl });
+      console.log("5. ElevenLabs session started"); // 👈
+
+    } catch (err) {
+      console.error("Voice session failed:", err); // this will tell us exactly where it dies
+      alert(`Error: ${err.message}`);
+    }
+  }
+}, [isListening, conversation, activeTab]);
 
   const handleSelectFriendFromList = (id) => {
     setActiveTab('friends'); 
@@ -414,7 +495,7 @@ const App = () => {
     .logo-text { font-size: 14px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; margin: 0; pointer-events: auto; cursor: pointer; transition: opacity 0.3s ease; }
     .logo-text:hover { opacity: 0.7; }
 
-    .header-placeholder { width: 44px; height: 44px; pointer-events: none; } /* Keeps the logo centered */
+    .header-placeholder { width: 44px; height: 44px; pointer-events: none; }
 
     .content-area { flex: 1; position: relative; }
     .canvas-wrapper { position: absolute; inset: 0; z-index: 1; cursor: pointer; }
@@ -426,6 +507,7 @@ const App = () => {
       left: 50%; transform: translateX(-50%);
       display: flex; flex-direction: column; align-items: center;
       pointer-events: none; z-index: 5;
+      width: 80%; max-width: 600px;
     }
 
     .status-badge {
@@ -433,6 +515,16 @@ const App = () => {
       text-transform: uppercase; background-color: rgba(255, 255, 255, 0.6);
       border: 1px solid rgba(255, 255, 255, 0.8); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
       backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    }
+
+    .transcript-container {
+        margin-top: 32px; text-align: center;
+    }
+    
+    .transcript-text {
+        font-size: 20px; font-weight: 500; color: var(--text-primary);
+        line-height: 1.4; letter-spacing: -0.01em; margin: 0;
+        text-shadow: 0 2px 10px rgba(255,255,255,0.8);
     }
 
     .forum-placeholder {
@@ -600,13 +692,12 @@ const App = () => {
                 <Menu size={20} color="var(--text-primary)" strokeWidth={1.5} />
               </MagneticButton>
               <motion.h1 className="logo-text" initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.5 }}>Echo</motion.h1>
-              {/* Replaced the Notification bell with an invisible placeholder to keep the layout perfectly centered */}
               <div className="header-placeholder" /> 
             </header>
           )}
 
           <main className="content-area">
-            {/* The 3D Canvas is universally rendered in the background, but only displays the Audio Ring when on the voice tab */}
+            {/* The 3D Canvas is universally rendered in the background */}
             <div className="canvas-wrapper" onClick={appState === 'main' && activeTab === 'voice' ? toggleListening : undefined}>
               <Canvas camera={{ position: [0, 0, 5], fov: 40 }} dpr={[1, Math.min(2, window.devicePixelRatio)]}>
                 <color attach="background" args={['#fafafa']} />
@@ -615,7 +706,12 @@ const App = () => {
                   <directionalLight position={[5, 5, 5]} intensity={2} />
                   <directionalLight position={[-5, -5, -2]} intensity={1} />
                   <Environment preset="studio" />
-                  {activeTab === 'voice' && <ReactiveAudioRing isListening={isListening} />}
+                  {activeTab === 'voice' && (
+                    <ReactiveAudioRing 
+                      isListening={isListening} 
+                      volume={conversation.inputVolume} 
+                    />
+                  )}
                   <EffectComposer disableNormalPass>
                     <Vignette eskil={false} offset={0.1} darkness={0.4} />
                   </EffectComposer>
@@ -635,7 +731,6 @@ const App = () => {
                 />
               )}
 
-              {/* Added a clean placeholder view for the new Forum tab */}
               {appState === 'main' && activeTab === 'forum' && (
                 <motion.div 
                   key="forum-view"
@@ -665,6 +760,21 @@ const App = () => {
                     >
                       {isListening ? "Listening..." : "Tap anywhere to capture"}
                     </motion.div>
+                  </AnimatePresence>
+                  
+                  {/* Real-time Transcription Display */}
+                  <AnimatePresence>
+                    {transcript && (
+                        <motion.div
+                            key="transcript-view"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                            className="transcript-container"
+                        >
+                            <p className="transcript-text">"{transcript}"</p>
+                        </motion.div>
+                    )}
                   </AnimatePresence>
                 </div>
               )}
@@ -708,7 +818,7 @@ const App = () => {
                     hoverScale={1.15}
                     onClick={() => {
                       setActiveTab('friends');
-                      setIsListening(false);
+                      if(isListening) toggleListening();
                     }}
                   >
                     <Users size={22} strokeWidth={2} />
@@ -717,7 +827,6 @@ const App = () => {
                     )}
                   </MagneticButton>
 
-                  {/* Added the new Forum tab to the navigation */}
                   <MagneticButton 
                     isActive={activeTab === 'forum'}
                     className="nav-item" 
@@ -725,7 +834,7 @@ const App = () => {
                     hoverScale={1.15}
                     onClick={() => {
                       setActiveTab('forum');
-                      setIsListening(false);
+                      if(isListening) toggleListening();
                     }}
                   >
                     <MessageSquare size={22} strokeWidth={2} />

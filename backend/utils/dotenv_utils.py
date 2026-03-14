@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+load_dotenv()
 
 load_dotenv()
 
@@ -39,3 +40,7 @@ def get_supabase_storage_bucket():
 
 def get_elevenlabs_key():
     return os.getenv("ELEVENLABS_API_KEY")
+
+def get_agent_id():
+    # This is the specific ID for the transcription agent
+    return os.getenv("AGENT_ID")

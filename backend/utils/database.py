@@ -1,5 +1,8 @@
+import certifi
+import os
 from motor.motor_asyncio import AsyncIOMotorClient
 
+os.environ["SSL_CERT_FILE"] = certifi.where()
 from .dotenv_utils import get_mongo_uri
 
 MONGO_URI = get_mongo_uri()
