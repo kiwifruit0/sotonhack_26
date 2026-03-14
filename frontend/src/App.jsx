@@ -966,6 +966,7 @@ const App = () => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const isListening = conversation.status === 'connected';
+  const audioRef = useRef(null); 
 
   const toggleListening = useCallback(async () => {
     if (isListening) {
@@ -1030,6 +1031,28 @@ const App = () => {
     setShowSummaryPrompt(false);
     if (isListening) conversation.endSession();
     setAppState('login');
+  };
+
+  const handleSummaryYes = async () => {
+    setShowSummaryPrompt(false);
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/speech/summary/daily?username=${encodeURIComponent(currentUser.username)}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error('Failed to fetch summary');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+      audioRef.current = new Audio(url);
+      audioRef.current.play();
+      audioRef.current.onended = () => URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Daily summary error:', err);
+    }
   };
 
   const styles = `
@@ -1515,7 +1538,7 @@ const App = () => {
 
                 {showSummaryPrompt && (
                   <DailySummaryPrompt
-                    onYes={() => setShowSummaryPrompt(false)}
+                    onYes={handleSummaryYes}
                     onNo={() => setShowSummaryPrompt(false)}
                   />
                 )}
