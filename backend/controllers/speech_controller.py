@@ -1,17 +1,20 @@
-from dotenv import load_dotenv
+from ..utils.dotenv_utils import get_elevenlabs_key
+
 from elevenlabs.client import ElevenLabs
 from elevenlabs.play import play
+
+from fastapi import FastAPI, HTTPException
 from google import genai
-import os
-load_dotenv()
 
 elevenlabs = ElevenLabs(
-  api_key=os.getenv("ELEVENLABS_KEY"),
+  api_key=get_elevenlabs_key
 )
+client = genai.Client()
+MODEL_ID = "gemini-2.0-flash"
 
-def output_text(user_id):
+def output_text(user_id, text_contents):
     audio = elevenlabs.text_to_speech.convert(
-        text="The first move is what sets everything in motion.",
+        text=text_contents,
         voice_id="JBFqnCBsd6RMkjVDRZzb",
         model_id="eleven_multilingual_v2",
         output_format="mp3_44100_128",
@@ -31,3 +34,14 @@ def input_speech():
 
     return transcription
 
+
+async def call_gemini(prompt: str) -> str:
+    """Helper to handle the API call and basic error checking."""
+    try:
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=prompt
+        )
+        return response.text.strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Provider Error: {str(e)}")
