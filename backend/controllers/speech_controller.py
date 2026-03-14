@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from google import genai
 
 elevenlabs = ElevenLabs(
-  api_key=get_elevenlabs_key
+  api_key=get_elevenlabs_key()
 )
 client = genai.Client()
 MODEL_ID = "gemini-2.5-flash"
