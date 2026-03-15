@@ -1338,6 +1338,7 @@ const RecordingSession = ({ currentUser, audioRef ,onDone }) => {
   const [forumOverlayVisible, setForumOverlayVisible] = useState(false);
   const analyserNodeRef = useRef(null);
   const audioContextForRecRef = useRef(null);
+  const [forumOverlayQuestion, setForumOverlayQuestion] = useState(null);
 
   // Speak a prompt then start recording
   const speakPromptThenRecord = useCallback(async () => {
@@ -1498,10 +1499,11 @@ const App = () => {
   const recordingStartRef = useRef(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingMode, setRecordingMode] = useState(null); // 'daily-note' | 'ask-question' | 'answer-question' | null
-
-  const [forumOverlayVisible, setForumOverlayVisible] = useState(false);
   const analyserNodeRef = useRef(null);   // holds the live Web Audio AnalyserNode
   const audioContextForRecRef = useRef(null); // AudioContext used during recording
+
+  const [forumOverlayVisible, setForumOverlayVisible] = useState(false);
+  const [forumOverlayQuestion, setForumOverlayQuestion] = useState(null);
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -2188,6 +2190,9 @@ const App = () => {
           await speakThenAct("Thanks, your answer has been posted.", () => {
             setRecordingPhase(null);
             setRecordingMode(null);
+            setForumOverlayVisible(false);
+            setForumOverlayQuestion(null);
+            setActiveTab('forum');        // ← boot into forum page
             promptActionChoice();
           });
         } catch (err) {
@@ -2251,23 +2256,27 @@ const App = () => {
       }
       try {
         const res = await fetch(`${FORUM_BASE}/get_question/${encodeURIComponent(username)}`);
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Get question failed: ${res.status} ${errText}`);
-        }
+        if (!res.ok) throw new Error(`Get question failed: ${res.status}`);
         const payload = await res.json();
         const question = payload?.question;
         const postId = question?.id;
         const questionText = question?.questionText;
-
+    
         if (!postId || !questionText) {
           const msg = payload?.message || "I couldn't find a question for you right now.";
           await speakThenAct(msg, () => promptActionChoice());
           return;
         }
-
+    
+        // Switch to forum tab and show the question before recording
+        setActiveTab('forum');
+        setForumOverlayVisible(true);
+        setForumOverlayQuestion({ id: postId, text: questionText, author: question.authorUsername ?? 'Community' });
+        setRecordingMode('answer-question');
+        setRecordingPhase('reading'); // new phase — reading the question aloud
+    
         await speakThenAct(
-          `Okay, here's a question: ${questionText}. Press done when you're finished answering.`,
+          `Here's a question from ${question.authorUsername ?? 'the community'}: ${questionText}. Press done when you're finished answering.`,
           () => startAnswerQuestionRecording(postId)
         );
       } catch (err) {
@@ -3185,9 +3194,13 @@ const App = () => {
                       setRecordingPhase(null);
                       setRecordingMode(null);
                       setForumOverlayVisible(false);
+                      setForumOverlayQuestion(null);
                       promptActionChoice();
                     }}
                     analyserNode={analyserNodeRef.current}
+                    question={forumOverlayQuestion}
+                    spokenText={spokenText}
+                    revealedWords={revealedWords}
                   />
                 )}
 

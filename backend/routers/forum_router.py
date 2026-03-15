@@ -1,7 +1,8 @@
 from bson import ObjectId
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, StreamingResponse
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from ..controllers.daily_summary_controller import collate_forum_answers
 from .db_router import list_interests

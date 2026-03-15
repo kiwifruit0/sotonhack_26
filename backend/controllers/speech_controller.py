@@ -8,7 +8,7 @@ from ..utils.dotenv_utils import get_elevenlabs_key
 
 elevenlabs = ElevenLabs(api_key=get_elevenlabs_key())
 client = genai.Client()
-MODEL_ID = "gemini-2.5-flash"
+MODEL_ID = "gemini-2.5-flash-lite"
 
 
 async def output_speech(username, text_contents):
