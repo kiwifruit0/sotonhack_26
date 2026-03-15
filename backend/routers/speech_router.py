@@ -49,7 +49,7 @@ async def daily_summary(username: str = Query(...)):
     )
 
 @router.post("/summary/forum_answers")
-async def collate_forum_answers(username):
+async def get_forum_answers(username):
     buf = await collate_forum_answers(username)
     return StreamingResponse(
         buf,
