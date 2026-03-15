@@ -2777,13 +2777,24 @@ const App = () => {
   width: 100%;
 }
 .profile-interest-pill {
-  padding: 8px 16px; border-radius: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 16px; border-radius: 24px;
   background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.07);
-  font-size: 13px; font-weight: 500; color: var(--text-primary);
+  font-size: 13px; line-height: 1.35; font-weight: 500; color: var(--text-primary);
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
   transition: var(--transition-smooth);
 }
 .profile-interest-pill:hover {
   background: rgba(0,0,0,0.08); border-color: rgba(0,0,0,0.14);
+}
+.profile-interests-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  align-items: flex-start;
 }
 .profile-loading {
   display: flex; align-items: center; gap: 10px;
