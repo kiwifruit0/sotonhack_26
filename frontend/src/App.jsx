@@ -1158,84 +1158,172 @@ const RecordDailySummaryPrompt = ({ onYes, onNo }) => (
 );
 
 // --- 11d. Recording Session ---
-const RecordingSession = ({ currentUser, onDone }) => {
-  const [phase, setPhase] = useState('idle'); // idle | recording | uploading | done | error
-  const [seconds, setSeconds] = useState(0);
+const RecordingSession = ({ currentUser, audioRef ,onDone }) => {
+  const [phase, setPhase] = useState('prompting'); // prompting | recording | processing | uploading | done | error
   const [errorMsg, setErrorMsg] = useState('');
+  const [seconds, setSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const startTimeRef = useRef(null);
+  const silenceTimerRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const silenceCheckRef = useRef(null);
+  const streamRef = useRef(null);
 
-  const startRecording = useCallback(async () => {
+  // Speak a prompt then start recording
+  const speakPromptThenRecord = useCallback(async () => {
+    setPhase('prompting');
+  
+    // Stop anything currently playing before speaking
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.onended = null; // cancel any chained callbacks
+      try { URL.revokeObjectURL(audioRef.current.src); } catch {}
+    }
+  
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/speech/text_to_speech?username=${encodeURIComponent(currentUser.username)}&text=${encodeURIComponent("What was your day like? Take your time, and when you're done just click the done button.")}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error('TTS failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+  
+      audioRef.current = new Audio(url);
+      audioRef.current.play();
+      audioRef.current.onended = () => {
+        URL.revokeObjectURL(url);
+        startRecording();
+      };
+    } catch (err) {
+      console.warn('Prompt TTS failed:', err);
+      startRecording();
+    }
+  }, [currentUser, audioRef]);
+
+  const stopDailyRecording = useCallback(() => {
+    cancelAnimationFrame(silenceCheckRef.current);
+    clearInterval(recordingTimerRef.current);
+    audioContextRef.current?.close();
+    if (mediaRecorderRef2.current?.state !== 'inactive') {
+      mediaRecorderRef2.current?.stop();
+    }
+    setRecordingPhase('processing');
+  }, []);
+  
+  const startDailyRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      chunksRef.current = [];
-      // Prefer OGG/Opus; fall back to whatever the browser supports
+      recordingStreamRef.current = stream;
+      recordingChunksRef.current = [];
+  
       const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
         ? 'audio/ogg;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
+  
       const mr = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mr;
-      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.onstop = () => {
+      mediaRecorderRef2.current = mr;
+      mr.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
-        handleUpload(mimeType);
+        try {
+          setRecordingPhase('uploading');
+          const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
+          const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+          const duration = Math.floor((Date.now() - recordingStartRef.current) / 1000);
+          const today = new Date().toISOString().split('T')[0];
+          const uploadForm = new FormData();
+          uploadForm.append('user_id', currentUserRef.current.id);
+          uploadForm.append('date', today);
+          uploadForm.append('duration_sec', String(duration));
+          uploadForm.append('audio_file', blob, `daily-note${ext}`);
+          await fetch(`${API_BASE}/daily-notes/upload`, { method: 'POST', body: uploadForm });
+          setRecordingPhase('done');
+          await speakThenAct("Got it, your daily note has been saved.", () => {
+            setRecordingPhase(null);
+            promptActionChoice();
+          });
+        } catch (err) {
+          console.warn('Upload failed:', err);
+          setRecordingPhase(null);
+          promptActionChoice();
+        }
       };
+  
       mr.start(100);
-      startTimeRef.current = Date.now();
-      setPhase('recording');
-      timerRef.current = setInterval(() => {
-        setSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      recordingStartRef.current = Date.now();
+      setRecordingPhase('recording');
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(Math.floor((Date.now() - recordingStartRef.current) / 1000));
       }, 500);
+  
+      // Silence detection
+      audioContextRef.current = new AudioContext();
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const analyser = audioContextRef.current.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.fftSize);
+      let silenceStart = null;
+  
+      const check = () => {
+        if (mediaRecorderRef2.current?.state === 'inactive') return;
+        analyser.getByteTimeDomainData(dataArray);
+        const rms = Math.sqrt(
+          dataArray.reduce((sum, val) => sum + Math.pow(val - 128, 2), 0) / dataArray.length
+        );
+        if (rms < 8) {
+          if (!silenceStart) silenceStart = Date.now();
+          else if (Date.now() - silenceStart >= 7000) { stopDailyRecording(); return; }
+        } else {
+          silenceStart = null;
+        }
+        silenceCheckRef.current = requestAnimationFrame(check);
+      };
+      silenceCheckRef.current = requestAnimationFrame(check);
+  
     } catch (err) {
-      setErrorMsg('Microphone access denied.');
-      setPhase('error');
+      console.warn('Mic failed:', err);
+      setRecordingPhase(null);
     }
+  }, [speakThenAct, stopDailyRecording, promptActionChoice]);
+
+
+  useEffect(() => {
+    speakPromptThenRecord();
+    return () => {
+      cancelAnimationFrame(silenceCheckRef.current);
+      clearInterval(timerRef.current);
+      audioContextRef.current?.close();
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
   }, []);
-
-  const stopRecording = useCallback(() => {
-    clearInterval(timerRef.current);
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    setPhase('uploading');
-  }, []);
-
-  const handleUpload = useCallback(async (mimeType) => {
-    try {
-      const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
-      const blob = new Blob(chunksRef.current, { type: mimeType });
-      const duration = Math.floor((Date.now() - startTimeRef.current) / 1000);
-      const today = new Date().toISOString().split('T')[0];
-
-      const form = new FormData();
-      form.append('user_id', currentUser.id);
-      form.append('date', today);
-      form.append('duration_sec', String(duration));
-      form.append('audio_file', blob, `daily-note${ext}`);
-
-      const res = await fetch(`${API_BASE}/daily-notes/upload`, {
-        method: 'POST',
-        body: form,
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || 'Upload failed');
-      }
-      setPhase('done');
-      setTimeout(onDone, 1400);
-    } catch (err) {
-      setErrorMsg(err.message || 'Upload failed.');
-      setPhase('error');
-    }
-  }, [currentUser, onDone]);
-
-  useEffect(() => () => clearInterval(timerRef.current), []);
 
   const formatTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  const phaseLabel = {
+    prompting: 'Getting ready…',
+    recording: 'Recording…',
+    processing: 'Processing…',
+    uploading: 'Saving…',
+    done: 'Saved!',
+    error: 'Something went wrong',
+  };
+
+  const phaseBody = {
+    prompting: 'Listen for your prompt, then speak freely.',
+    recording: <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.04em' }}>{formatTime(seconds)}</span>,
+    processing: 'Checking your recording…',
+    uploading: 'Uploading your daily note…',
+    done: 'Your daily note has been saved.',
+    error: errorMsg,
+  };
 
   return (
     <AnimatePresence>
@@ -1243,10 +1331,9 @@ const RecordingSession = ({ currentUser, onDone }) => {
         <motion.div className="summary-card" initial={{ opacity: 0, y: 32, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.97 }} transition={{ type: 'spring', stiffness: 320, damping: 28 }}>
           <div className="summary-ring" aria-hidden />
 
-          {/* Animated mic / status icon */}
           <motion.div
             className="summary-icon"
-            animate={phase === 'recording' ? { scale: [1, 1.12, 1], boxShadow: ['0 8px 20px rgba(0,0,0,0.16)', '0 8px 28px rgba(0,0,0,0.28)', '0 8px 20px rgba(0,0,0,0.16)'] } : {}}
+            animate={phase === 'recording' ? { scale: [1, 1.12, 1] } : {}}
             transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
             initial={{ scale: 0.7, opacity: 0 }}
             whileInView={{ scale: 1, opacity: 1 }}
@@ -1265,57 +1352,30 @@ const RecordingSession = ({ currentUser, onDone }) => {
             )}
           </motion.div>
 
-          <motion.h3 className="summary-title" animate={{}} transition={{}}>
-            {phase === 'idle' && 'How was your day?'}
-            {phase === 'recording' && 'Recording…'}
-            {phase === 'uploading' && 'Saving…'}
-            {phase === 'done' && 'Saved!'}
-            {phase === 'error' && 'Something went wrong'}
-          </motion.h3>
-
-          <motion.p className="summary-body">
-            {phase === 'idle' && 'Tap the button below and speak freely. Echo will save your note.'}
-            {phase === 'recording' && (
-              <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.04em' }}>
-                {formatTime(seconds)}
-              </span>
-            )}
-            {phase === 'uploading' && 'Uploading your daily note…'}
-            {phase === 'done' && 'Your daily note has been saved.'}
-            {phase === 'error' && errorMsg}
-          </motion.p>
+          <motion.h3 className="summary-title">{phaseLabel[phase]}</motion.h3>
+          <motion.p className="summary-body">{phaseBody[phase]}</motion.p>
 
           <motion.div className="summary-actions">
-            {phase === 'idle' && (
-              <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={startRecording}>
-                Start recording
+            {(phase === 'prompting' || phase === 'recording' || phase === 'processing' || phase === 'uploading') && (
+              <motion.button
+                className="summary-btn summary-btn--no"
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.96 }}
+                onClick={() => { stopRecording(); onDone(); }}
+              >
+                Cancel
               </motion.button>
-            )}
-            {phase === 'recording' && (
-              <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={stopRecording}
-                style={{ background: '#c0392b' }}>
-                Stop recording
-              </motion.button>
-            )}
-            {(phase === 'uploading') && (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
-                <span className="auth-spinner" style={{ borderColor: 'rgba(0,0,0,0.1)', borderTopColor: 'var(--text-primary)', width: 24, height: 24 }} />
-              </div>
             )}
             {phase === 'error' && (
               <>
-                <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => { setPhase('idle'); setSeconds(0); setErrorMsg(''); }}>
+                <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                  onClick={() => { setPhase('prompting'); setSeconds(0); setErrorMsg(''); speakPromptThenRecord(); }}>
                   Try again
                 </motion.button>
                 <motion.button className="summary-btn summary-btn--no" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={onDone}>
                   Skip
                 </motion.button>
               </>
-            )}
-            {(phase === 'idle' || phase === 'recording') && (
-              <motion.button className="summary-btn summary-btn--no" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => { stopRecording(); onDone(); }} disabled={phase === 'idle'} style={{ opacity: phase === 'idle' ? 0 : 1, pointerEvents: phase === 'idle' ? 'none' : 'auto' }}>
-                Cancel
-              </motion.button>
             )}
           </motion.div>
         </motion.div>
@@ -1326,9 +1386,10 @@ const RecordingSession = ({ currentUser, onDone }) => {
 
 // --- 12. Main Application Component ---
 const App = () => {
+  const [summaryPhase, setSummaryPhase] = useState(null);
   const [appState, setAppState] = useState('booting');
   const [currentUser, setCurrentUser] = useState(null);
-  const [summaryPhase, setSummaryPhase] = useState(null);
+  const [recordingPhase, setRecordingPhase] = useState(null);
   const [activeTab, setActiveTab] = useState('voice');
   const [isFriendsListOpen, setIsFriendsListOpen] = useState(false);
   const [selectedFriendId, setSelectedFriendId] = useState(null);
@@ -1339,12 +1400,17 @@ const App = () => {
 
   const [showRecordPrompt, setShowRecordPrompt] = useState(false);
   const [showRecordingSession, setShowRecordingSession] = useState(false);
-
-  const [revealedWords, setRevealedWords] = useState(0);
+  const [spokenText, setSpokenText] = useState(''); // the full text being spoken
+  const [revealedWords, setRevealedWords] = useState(0); // how many words shown so far
 
   const [listeningForResponse, setListeningForResponse] = useState(false);
 
   const currentUserRef = useRef(null);
+  const mediaRecorderRef2 = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null);
+  const recordingStartRef = useRef(null);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -1375,21 +1441,19 @@ const App = () => {
 
   const askDailySummaryVoice = useCallback(async (user) => {
     setSummaryPhase('asking');
-    setRevealedWords(0);
   
     const questionText = "Would you like to hear your daily summary?";
     const words = questionText.split(' ');
   
-    const url = `http://127.0.0.1:8000/speech/text_to_speech?username=${encodeURIComponent(user.username)}&text=${encodeURIComponent(questionText)}`;
-    console.log('TTS URL:', url); // check this prints correctly in console
+    setSpokenText(questionText);
+    setRevealedWords(0);
   
     try {
-      const res = await fetch(url, { method: 'POST' });
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`HTTP ${res.status}: ${err}`);
-      }
-  
+      const res = await fetch(
+        `http://127.0.0.1:8000/speech/text_to_speech?username=${encodeURIComponent(user.username)}&text=${encodeURIComponent(questionText)}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error('TTS failed');
       const blob = await res.blob();
       const audioUrl = URL.createObjectURL(blob);
       if (audioRef.current) { audioRef.current.pause(); URL.revokeObjectURL(audioRef.current.src); }
@@ -1406,14 +1470,16 @@ const App = () => {
       audioRef.current.play();
       audioRef.current.onended = () => {
         URL.revokeObjectURL(audioUrl);
-        listenForSummaryResponse(); // start listening immediately after question finishes
+        setSpokenText('');
+        setRevealedWords(0);
+        listenForSummaryResponseRef.current?.(); // via ref, not direct dep
       };
-  
     } catch (err) {
-      console.warn('TTS prompt failed:', err.message);
+      console.warn('TTS prompt failed:', err);
+      setSpokenText('');
       setRevealedWords(words.length);
     }
-  }, []);
+  }, []); // no deps needed — reads everything via refs
 
   const handleRegister = (user) => {
     setCurrentUser(user);
@@ -1596,42 +1662,18 @@ const App = () => {
     setAppState('login');
   };
 
-  const handleSummaryYes = useCallback(async () => {
-    const user = currentUserRef.current;
-    if (!user?.username) return;
-  
-    try {
-      const res = await fetch(
-        `http://127.0.0.1:8000/speech/summary/daily?username=${encodeURIComponent(user.username)}`,
-        { method: 'POST' }
-      );
-      if (!res.ok) throw new Error('Failed to fetch summary');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        URL.revokeObjectURL(audioRef.current.src);
-      }
-      audioRef.current = new Audio(url);
-      audioRef.current.play();
-      audioRef.current.onended = () => {
-        URL.revokeObjectURL(url);
-        setShowRecordPrompt(true);
-      };
-    } catch (err) {
-      console.error('Daily summary error:', err);
-      setShowRecordPrompt(true);
-    }
-  }, []);
-
+  // ── Refs for circular dependencies ──────────────────────────────────────────
   const listenForSummaryResponseRef = useRef(null);
   const handleGeneralisedChoiceRef = useRef(null);
+  const listenForActionChoiceRef = useRef(null);
+  const handleActionChoiceRef = useRef(null);
 
+  // ── 1. speakThenAct (no deps, must be first as everything uses it) ───────────
   const speakThenAct = useCallback(async (text, onDone) => {
     try {
       const user = currentUserRef.current;
       if (!user?.username) { onDone?.(); return; }
-
+  
       const res = await fetch(
         `http://127.0.0.1:8000/speech/text_to_speech?username=${encodeURIComponent(user.username)}&text=${encodeURIComponent(text)}`,
         { method: 'POST' }
@@ -1640,18 +1682,41 @@ const App = () => {
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       if (audioRef.current) { audioRef.current.pause(); URL.revokeObjectURL(audioRef.current.src); }
+  
+      // Set the new spoken text and reset word counter
+      const words = text.split(' ');
+      setSpokenText(text);
+      setRevealedWords(0);
+  
       audioRef.current = new Audio(url);
+  
+      audioRef.current.addEventListener('loadedmetadata', () => {
+        const duration = audioRef.current.duration;
+        const interval = duration / words.length;
+        words.forEach((_, i) => {
+          setTimeout(() => setRevealedWords(i + 1), i * interval * 1000);
+        });
+      });
+  
       audioRef.current.play();
       audioRef.current.onended = () => {
         URL.revokeObjectURL(url);
+        setSpokenText('');
+        setRevealedWords(0);
         onDone?.();
       };
     } catch (err) {
       console.warn('speakThenAct failed:', err);
+      setSpokenText('');
+      setRevealedWords(0);
       onDone?.();
     }
-  }, []); // no dependencies needed — reads ref directly
+  }, []);
 
+  const speakThenActRef = useRef(null);
+  // after speakThenAct is defined:
+  speakThenActRef.current = speakThenAct;
+    // ── 2. listenForSummaryResponse (no deps, calls handleGeneralisedChoice via ref) ──
   const listenForSummaryResponse = useCallback(async () => {
     setListeningForResponse(true);
     try {
@@ -1660,13 +1725,10 @@ const App = () => {
         ? 'audio/webm;codecs=opus' : 'audio/webm';
       const recorder = new MediaRecorder(stream, { mimeType });
       const chunks = [];
-  
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-  
       recorder.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
         try {
-          // Transcribe
           const blob = new Blob(chunks, { type: mimeType });
           const formData = new FormData();
           formData.append('file', blob, 'response.webm');
@@ -1677,58 +1739,223 @@ const App = () => {
             body: formData,
           });
           if (!sttRes.ok) throw new Error('STT failed');
-          const sttData = await sttRes.json();
-          const transcript = sttData.text;
-  
-          // Generalise
+          const { text } = await sttRes.json();
+      
+          // Guard: if nothing was heard, ask again
+          if (!text?.trim()) {
+            setListeningForResponse(false);
+            await speakThenActRef.current?.(
+              "Sorry, I didn't catch that. Would you like to hear your daily summary?",
+              () => listenForSummaryResponseRef.current?.()
+            );
+            return;
+          }
+      
           const genRes = await fetch(
-            `http://127.0.0.1:8000/speech/yes_or_no?text=${encodeURIComponent(transcript)}`,
+            `http://127.0.0.1:8000/speech/yes_or_no?text=${encodeURIComponent(text)}`,
             { method: 'POST' }
           );
-          if (!genRes.ok) throw new Error('Generalise failed');
+          if (!genRes.ok) {
+            const errText = await genRes.text();
+            throw new Error(`yes_or_no failed: ${genRes.status} ${errText}`);
+          }
           const choice = await genRes.json();
-  
-          await handleGeneralisedChoice(choice);
+          handleGeneralisedChoiceRef.current?.(choice);
         } catch (err) {
           console.warn('Response processing failed:', err);
           setListeningForResponse(false);
           setSummaryPhase(null);
         }
       };
-  
-      // Record for 4 seconds then stop
       recorder.start();
       setTimeout(() => recorder.stop(), 4000);
-  
     } catch (err) {
       console.warn('Mic failed:', err);
       setListeningForResponse(false);
     }
   }, []);
 
+  // ── 3. listenForActionChoice (no deps, calls handleActionChoice via ref) ─────
+  const listenForActionChoice = useCallback(async () => {
+    setListeningForResponse(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        try {
+          const blob = new Blob(chunks, { type: mimeType });
+          const formData = new FormData();
+          formData.append('file', blob, 'response.webm');
+          formData.append('model_id', 'scribe_v1');
+          const sttRes = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+            method: 'POST',
+            headers: { 'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY },
+            body: formData,
+          });
+          if (!sttRes.ok) throw new Error('STT failed');
+          const { text } = await sttRes.json();
+          const genRes = await fetch(
+            `http://127.0.0.1:8000/speech/generalise?text=${encodeURIComponent(text)}`,
+            { method: 'POST' }
+          );
+          if (!genRes.ok) throw new Error('Generalise failed');
+          const choice = await genRes.json();
+          handleActionChoiceRef.current?.(choice); // via ref — not yet defined
+        } catch (err) {
+          console.warn('Action choice processing failed:', err);
+          setListeningForResponse(false);
+        }
+      };
+      recorder.start();
+      setTimeout(() => recorder.stop(), 4000);
+    } catch (err) {
+      console.warn('Mic failed:', err);
+      setListeningForResponse(false);
+    }
+  }, []);
+
+  // ── 4. promptActionChoice (depends on speakThenAct only, calls listen via ref) ──
+  const promptActionChoice = useCallback(async () => {
+    await speakThenAct(
+      "What would you like to do? You can ask a question, answer a question, record your daily note, or listen to your post summary.",
+      () => listenForActionChoiceRef.current?.()
+    );
+  }, [speakThenAct]);
+
+  const stopDailyRecording = useCallback(() => {
+    clearInterval(recordingTimerRef.current);
+    if (mediaRecorderRef2.current?.state !== 'inactive') {
+      mediaRecorderRef2.current?.stop();
+    }
+  }, []);
+  
+  const startDailyRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingChunksRef.current = [];
+  
+      const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+        ? 'audio/ogg;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+  
+      const mr = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef2.current = mr;
+  
+      mr.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        try {
+          setRecordingPhase('uploading');
+          const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
+          const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+          const duration = Math.floor((Date.now() - recordingStartRef.current) / 1000);
+          const today = new Date().toISOString().split('T')[0];
+          const uploadForm = new FormData();
+          uploadForm.append('user_id', currentUserRef.current.id);
+          uploadForm.append('date', today);
+          uploadForm.append('duration_sec', String(duration));
+          uploadForm.append('audio_file', blob, `daily-note${ext}`);
+          await fetch(`${API_BASE}/daily-notes/upload`, { method: 'POST', body: uploadForm });
+          setRecordingPhase('done');
+          await speakThenAct("Got it, your daily note has been saved.", () => {
+            setRecordingPhase(null);
+            promptActionChoice();
+          });
+        } catch (err) {
+          console.warn('Upload failed:', err);
+          setRecordingPhase(null);
+          promptActionChoice();
+        }
+      };
+  
+      mr.start(100);
+      recordingStartRef.current = Date.now();
+      setRecordingPhase('recording');
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(Math.floor((Date.now() - recordingStartRef.current) / 1000));
+      }, 500);
+  
+    } catch (err) {
+      console.warn('Mic failed:', err);
+      setRecordingPhase(null);
+    }
+  }, [speakThenAct, promptActionChoice]);
+
+  // ── 5. handleSummaryYes (depends on promptActionChoice) ──────────────────────
+  const handleSummaryYes = useCallback(async () => {
+    const user = currentUserRef.current;
+    if (!user?.username) return;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/speech/summary/daily?username=${encodeURIComponent(user.username)}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error('Failed to fetch summary');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (audioRef.current) { audioRef.current.pause(); URL.revokeObjectURL(audioRef.current.src); }
+      audioRef.current = new Audio(url);
+      audioRef.current.play();
+      audioRef.current.onended = () => { URL.revokeObjectURL(url); promptActionChoice(); };
+    } catch (err) {
+      console.error('Daily summary error:', err);
+      promptActionChoice();
+    }
+  }, [promptActionChoice]);
+
+  // ── 6. handleActionChoice (depends on speakThenAct + handleSummaryYes, calls listen via ref) ──
+  const handleActionChoice = useCallback(async (choice) => {
+    setListeningForResponse(false);
+    const trimmed = (typeof choice === 'string' ? choice : JSON.stringify(choice)).trim().toLowerCase();
+    if (trimmed.includes('1') || trimmed.includes('ask a question')) {
+      await speakThenAct("Sure, go ahead and ask your question.", () => { /* question flow */ });
+    } else if (trimmed.includes('2') || trimmed.includes('answer a question')) {
+      await speakThenAct("Okay, I'll find a question for you to answer.", () => { /* answer flow */ });
+    } else if (trimmed.includes('3') || trimmed.includes('record')) {
+      await speakThenAct(
+        "What was your day like? Take your time, and when you're done just say I'm done or stop talking for a few seconds.",
+        () => startDailyRecording()
+      );
+    } else if (trimmed.includes('4') || trimmed.includes('listen') || trimmed.includes('summary')) {
+      await speakThenAct("Of course, here is your daily summary.", () => handleSummaryYes());
+    } else {
+      await speakThenAct(
+        "Sorry, I didn't catch that. You can ask a question, answer a question, record your daily note, or listen to your summary.",
+        () => listenForActionChoiceRef.current?.()
+      );
+    }
+  }, [speakThenAct, handleSummaryYes]);
+
+  // ── 7. handleGeneralisedChoice (depends on speakThenAct + handleSummaryYes + promptActionChoice) ──
   const handleGeneralisedChoice = useCallback(async (choice) => {
     setListeningForResponse(false);
     setSummaryPhase(null);
     const trimmed = (typeof choice === 'string' ? choice : JSON.stringify(choice)).trim().toLowerCase();
-  
     if (trimmed.includes('yes') || trimmed.includes('1')) {
-      await speakThenAct(
-        "Of course, here is your daily summary.",
-        () => handleSummaryYes()
-      );
+      await speakThenAct("Of course, here is your daily summary.", () => handleSummaryYes());
     } else if (trimmed.includes('no') || trimmed.includes('2')) {
-      await speakThenAct("No problem, have a great day.", () => {});
+      await speakThenAct("No problem.", () => promptActionChoice());
     } else {
       await speakThenAct(
         "Sorry, I didn't catch that. Would you like to hear your daily summary?",
         () => listenForSummaryResponseRef.current?.()
       );
     }
-  }, [speakThenAct, handleSummaryYes]);
-  
+  }, [speakThenAct, handleSummaryYes, promptActionChoice]);
+
+  // ── 8. Sync all refs after every render ──────────────────────────────────────
   listenForSummaryResponseRef.current = listenForSummaryResponse;
   handleGeneralisedChoiceRef.current = handleGeneralisedChoice;
-
+  listenForActionChoiceRef.current = listenForActionChoice;
+  handleActionChoiceRef.current = handleActionChoice;
 
   const styles = `
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&display=swap');
@@ -2357,39 +2584,40 @@ const App = () => {
                   {appState === 'main' && activeTab === 'voice' && (
                     <div className="interaction-overlay" key="interaction-overlay">
                       <AnimatePresence mode="wait">
-                      {summaryPhase === 'asking' ? (
-                        <motion.div
-                          key="summary-question"
-                          initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
-                          animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-                          exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
-                          transition={{ duration: 0.4 }}
-                          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}
-                        >
-                          <p className="transcript-text" style={{ textAlign: 'center' }}>
-                            {"Would you like to hear your daily summary?".split(' ').map((word, i) => (
-                              <motion.span
-                                key={i}
-                                initial={{ opacity: 0, y: 6, filter: 'blur(3px)' }}
-                                animate={revealedWords > i
-                                  ? { opacity: 1, y: 0, filter: 'blur(0px)' }
-                                  : { opacity: 0, y: 6, filter: 'blur(3px)' }}
-                                transition={{ duration: 0.25, ease: 'easeOut' }}
-                                style={{ display: 'inline-block', marginRight: '0.28em' }}
-                              >
-                                {word}
-                              </motion.span>
-                            ))}
-                          </p>
 
-                          <AnimatePresence mode="wait">
-                            {listeningForResponse ? (
+                        {spokenText ? (
+                          <motion.div
+                            key="spoken-text"
+                            initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
+                            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                            exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
+                            transition={{ duration: 0.4 }}
+                            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}
+                          >
+                            <p className="transcript-text" style={{ textAlign: 'center' }}>
+                              {spokenText.split(' ').map((word, i) => (
+                                <motion.span
+                                  key={`${spokenText}-${i}`}
+                                  initial={{ opacity: 0, y: 6, filter: 'blur(3px)' }}
+                                  animate={revealedWords > i
+                                    ? { opacity: 1, y: 0, filter: 'blur(0px)' }
+                                    : { opacity: 0, y: 6, filter: 'blur(3px)' }}
+                                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                                  style={{ display: 'inline-block', marginRight: '0.28em' }}
+                                >
+                                  {word}
+                                </motion.span>
+                              ))}
+                            </p>
+
+                            {listeningForResponse && (
                               <motion.div
-                                key="listening-indicator"
                                 initial={{ opacity: 0, scale: 0.8 }}
                                 animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.8 }}
-                                style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: 13, pointerEvents: 'none' }}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 8,
+                                  color: 'var(--text-secondary)', fontSize: 13, pointerEvents: 'none'
+                                }}
                               >
                                 <motion.div
                                   animate={{ scale: [1, 1.3, 1] }}
@@ -2398,19 +2626,135 @@ const App = () => {
                                 />
                                 Listening...
                               </motion.div>
-                            ) : revealedWords >= "Would you like to hear your daily summary?".split(' ').length ? (
-                              <motion.div
-                                key="waiting"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                style={{ fontSize: 12, color: 'var(--text-secondary)', pointerEvents: 'none' }}
+                            )}
+                          </motion.div>
+
+                        ) : recordingPhase && recordingPhase !== 'done' ? (
+                          <motion.div
+                            key="recording-phase"
+                            initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
+                            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                            exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
+                            transition={{ duration: 0.4 }}
+                            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, pointerEvents: 'auto' }}
+                          >
+                            {/* Pulsing dot */}
+                            <motion.div
+                              animate={recordingPhase === 'recording' ? { scale: [1, 1.4, 1], opacity: [1, 0.6, 1] } : { scale: 1 }}
+                              transition={{ repeat: Infinity, duration: 1.2, ease: 'easeInOut' }}
+                              style={{
+                                width: 12, height: 12, borderRadius: '50%',
+                                background: recordingPhase === 'recording' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                boxShadow: recordingPhase === 'recording' ? '0 0 0 4px rgba(10,10,10,0.1)' : 'none',
+                              }}
+                            />
+
+                            {/* Timer or status */}
+                            <AnimatePresence mode="wait">
+                              <motion.p
+                                key={recordingPhase}
+                                className="transcript-text"
+                                style={{ textAlign: 'center', margin: 0 }}
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -8 }}
+                                transition={{ duration: 0.25 }}
                               >
-                                Waiting for your response...
-                              </motion.div>
-                            ) : null}
-                          </AnimatePresence>
-                        </motion.div>
-                      ) : (
+                                {recordingPhase === 'recording' && (
+                                  <span style={{ fontVariantNumeric: 'tabular-nums', letterSpacing: '0.04em' }}>
+                                    {`${String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:${String(recordingSeconds % 60).padStart(2, '0')}`}
+                                  </span>
+                                )}
+                                {recordingPhase === 'uploading' && "Saving your note…"}
+                                {recordingPhase === 'processing' && "Processing…"}
+                              </motion.p>
+                            </AnimatePresence>
+
+                            {/* Done + Cancel side by side — only while actively recording */}
+                            <AnimatePresence>
+                              {recordingPhase === 'recording' && (
+                                <motion.div
+                                  initial={{ opacity: 0, y: 8 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0, y: 8 }}
+                                  transition={{ duration: 0.25, delay: 0.1 }}
+                                  style={{ display: 'flex', flexDirection: 'row', gap: 10, alignItems: 'center' }}
+                                >
+                                  <motion.button
+                                    whileHover={{ scale: 1.06, y: -1 }}
+                                    whileTap={{ scale: 0.94 }}
+                                    onClick={stopDailyRecording}
+                                    style={{
+                                      padding: '12px 24px',
+                                      borderRadius: '24px',
+                                      background: 'var(--text-primary)',
+                                      color: 'var(--bg-colour)',
+                                      border: '1px solid var(--text-primary)',
+                                      fontSize: '14px',
+                                      fontWeight: 600,
+                                      fontFamily: 'inherit',
+                                      cursor: 'pointer',
+                                      boxShadow: '0 4px 16px rgba(0,0,0,0.14)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 8,
+                                    }}
+                                  >
+                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                                      <rect x="0" y="0" width="10" height="10" rx="2"/>
+                                    </svg>
+                                    Done
+                                  </motion.button>
+
+                                  <motion.button
+                                    whileHover={{ scale: 1.06, y: -1 }}
+                                    whileTap={{ scale: 0.94 }}
+                                    onClick={() => {
+                                      clearInterval(recordingTimerRef.current);
+                                      if (mediaRecorderRef2.current?.state !== 'inactive') {
+                                        mediaRecorderRef2.current?.stop();
+                                      }
+                                      setRecordingPhase(null);
+                                    }}
+                                    style={{
+                                      padding: '12px 24px',
+                                      borderRadius: '24px',
+                                      background: 'transparent',
+                                      color: 'var(--text-primary)',
+                                      border: '1px solid rgba(0,0,0,0.15)',
+                                      fontSize: '14px',
+                                      fontWeight: 600,
+                                      fontFamily: 'inherit',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    Cancel
+                                  </motion.button>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </motion.div>
+
+                        ) : listeningForResponse ? (
+                          <motion.div
+                            key="listening-only"
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0 }}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              color: 'var(--text-secondary)', fontSize: 13, pointerEvents: 'none'
+                            }}
+                          >
+                            <motion.div
+                              animate={{ scale: [1, 1.3, 1] }}
+                              transition={{ repeat: Infinity, duration: 1.2, ease: 'easeInOut' }}
+                              style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-primary)' }}
+                            />
+                            Listening...
+                          </motion.div>
+
+                        ) : (
                           <motion.div
                             key={isListening ? 'listening' : 'idle'}
                             initial={{ opacity: 0, y: 10, filter: 'blur(4px)' }}
@@ -2423,11 +2767,18 @@ const App = () => {
                             {isListening ? "Listening..." : "Tap anywhere to capture"}
                           </motion.div>
                         )}
+
                       </AnimatePresence>
 
                       <AnimatePresence>
-                        {transcript && summaryPhase === null && (
-                          <motion.div key="transcript-view" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="transcript-container">
+                        {transcript && !spokenText && !listeningForResponse && (
+                          <motion.div
+                            key="transcript-view"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                            className="transcript-container"
+                          >
                             <p className="transcript-text">"{transcript}"</p>
                           </motion.div>
                         )}
@@ -2458,6 +2809,7 @@ const App = () => {
                 {showRecordingSession && (
                   <RecordingSession
                     currentUser={currentUser}
+                    audioRef={audioRef}
                     onDone={() => setShowRecordingSession(false)}
                   />
                 )}

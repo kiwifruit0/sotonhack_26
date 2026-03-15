@@ -11,7 +11,7 @@ elevenlabs = ElevenLabs(
   api_key=get_elevenlabs_key()
 )
 client = genai.Client()
-MODEL_ID = "gemini-2.5-flash-lite"
+MODEL_ID = "gemini-2.5-flash"
 
 async def output_speech(username, text_contents):
     voice_id_key="JBFqnCBsd6RMkjVDRZzb"

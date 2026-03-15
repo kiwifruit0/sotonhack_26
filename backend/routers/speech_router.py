@@ -55,8 +55,8 @@ async def generalise_answer(text: str = Query(...)):
     There are FOUR options:
     1. Ask a question
     2. Answer a question
-    3. Yes (record daily voice note)
-    4. No (don't record daily voice note)
+    3. Record daily note
+    4. Listen to post summary
     Pick ONE option from the given choices.
     The order of priority between options is from top to bottom.
     If a user choice can not be determined, return 'None'.
