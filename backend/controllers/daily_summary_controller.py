@@ -14,9 +14,15 @@ async def collate_summaries(username):
     summaries = result["friendSummaries"]
     combined_audio = AudioSegment.empty()
 
-    intro_generator = await output_speech(username, "Here's what your friends are up to")
-    intro_bytes = b"".join(intro_generator)
-    combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
+    if summaries == []:
+        intro_generator = await output_speech(username, "There are no summaries from your friends to read.")
+        intro_bytes = b"".join(intro_generator)
+        combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
+
+    else:
+        intro_generator = await output_speech(username, "Here's what your friends are up to")
+        intro_bytes = b"".join(intro_generator)
+        combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
 
     for entry in summaries:
         print(entry)
