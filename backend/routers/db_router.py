@@ -1,11 +1,14 @@
 import json
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from bson import ObjectId
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
+from pydub import AudioSegment
 from pymongo import UpdateOne
 from pymongo.errors import DuplicateKeyError
 
@@ -229,7 +232,9 @@ async def add_user_interests(username: str, request: UserInterestAddRequest):
 
     interest_documents = [
         interest
-        async for interest in interests.find({"name": {"$in": normalized_interest_names}})
+        async for interest in interests.find(
+            {"name": {"$in": normalized_interest_names}}
+        )
     ]
     found_names = {interest["name"] for interest in interest_documents}
     missing_interests = [
@@ -679,11 +684,52 @@ async def get_audio_signed_url(
     return {"path": path, "signedUrl": signed_url, "expiresIn": expires_in}
 
 
+def _audio_format_from_path(audio_path: str) -> str | None:
+    if "." not in audio_path:
+        return None
+
+    extension = audio_path.rsplit(".", 1)[1].lower()
+    if extension in {"ogg", "oga"}:
+        return "ogg"
+    if extension in {"webm", "wav", "mp3"}:
+        return extension
+    if extension in {"m4a"}:
+        return "mp4"
+    return None
+
+
+async def get_audio_segment_from_audio_path(
+    audio_path: str, expires_in: int = 3600
+) -> AudioSegment:
+    signed_url_payload = await get_audio_signed_url(path=audio_path, expires_in=expires_in)
+    signed_url = signed_url_payload["signedUrl"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(signed_url)
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Signed URL audio download failed ({response.status_code}): {response.text}",
+        )
+    if not response.content:
+        raise HTTPException(status_code=502, detail="Signed URL returned empty audio")
+
+    format_hint = _audio_format_from_path(audio_path)
+    try:
+        return AudioSegment.from_file(BytesIO(response.content), format=format_hint)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to decode audio from storage path {audio_path}: {exc}",
+        ) from exc
+
+
 @router.get("/friendships/pending")
 async def get_pending_incoming_requests(incomingUsername: str = Query(...)):
     incoming_user = await _get_user_by_username(incomingUsername, "incomingUsername")
     incoming_user_id = incoming_user["_id"]
- 
+
     pending = []
     async for friendship in friendships.find(
         {
@@ -692,13 +738,18 @@ async def get_pending_incoming_requests(incomingUsername: str = Query(...)):
         }
     ):
         # Resolve the requesting user's username so the frontend doesn't need a second fetch
-        requesting_user = await users.find_one({"_id": friendship["requestingFriendId"]})
-        requesting_username = requesting_user["username"] if requesting_user else str(friendship["requestingFriendId"])
- 
+        requesting_user = await users.find_one(
+            {"_id": friendship["requestingFriendId"]}
+        )
+        requesting_username = (
+            requesting_user["username"]
+            if requesting_user
+            else str(friendship["requestingFriendId"])
+        )
+
         doc = _serialize_document(friendship)
         doc["requestingUsername"] = requesting_username
         doc["incomingUsername"] = incomingUsername
         pending.append(doc)
- 
+
     return pending
- 

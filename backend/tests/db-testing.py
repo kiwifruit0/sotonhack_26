@@ -4,6 +4,10 @@ from backend.utils.supabase_storage import (
     create_storage_signed_url,
     upload_storage_object,
 )
+from backend.tests.supabase_audio_helpers import (
+    upload_webm_file,
+    url_to_audio_file,
+)
 from backend.utils.dotenv_utils import (
     get_supabase_service_role_key,
     get_supabase_storage_bucket,
@@ -15,6 +19,7 @@ import asyncio
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 import httpx
@@ -128,12 +133,39 @@ async def test_supabase_read_write() -> None:
         await _delete_supabase_object(storage_path)
 
 
+async def test_supabase_webm_upload_and_url_conversion_methods() -> None:
+    run_id = uuid4().hex
+    storage_path = f"tests/audio-methods/{run_id}.webm"
+    source_audio = b"webm-test-audio-bytes"
+    created_local_path = None
+
+    with NamedTemporaryFile(mode="wb", suffix=".webm", delete=False) as source_file:
+        source_file.write(source_audio)
+        source_path = Path(source_file.name)
+
+    upload_result = await upload_webm_file(source_path, storage_path=storage_path)
+    try:
+        created_local_path = await url_to_audio_file(upload_result["publicUrl"])
+        downloaded_audio = created_local_path.read_bytes()
+        assert downloaded_audio == source_audio, (
+            "Audio URL conversion failed: file bytes mismatch"
+        )
+    finally:
+        source_path.unlink(missing_ok=True)
+        if created_local_path is not None:
+            created_local_path.unlink(missing_ok=True)
+        await _delete_supabase_object(upload_result["path"])
+
+
 async def run_db_tests() -> None:
     await test_mongodb_read_write()
     print("PASS: MongoDB read/write methods")
 
     await test_supabase_read_write()
     print("PASS: Supabase storage read/write methods")
+
+    await test_supabase_webm_upload_and_url_conversion_methods()
+    print("PASS: Supabase WebM upload + URL conversion methods")
 
     print("PASS: All DB tests passed.")
 
