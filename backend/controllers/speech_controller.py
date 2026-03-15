@@ -1,4 +1,6 @@
 from ..utils.dotenv_utils import get_elevenlabs_key
+from ..routers.db_router import _get_user_by_username
+
 from elevenlabs.client import ElevenLabs
 from elevenlabs.play import play
 
@@ -11,10 +13,16 @@ elevenlabs = ElevenLabs(
 client = genai.Client()
 MODEL_ID = "gemini-2.5-flash-lite"
 
-def output_speech(user_id, text_contents):
+async def output_speech(username, text_contents):
+    voice_id_key="JBFqnCBsd6RMkjVDRZzb"
+    user = await _get_user_by_username(username, "username")
+    if user["voiceId"]:
+        voice_id_key = user["voiceId"]
+
+
     audio = elevenlabs.text_to_speech.convert(
         text=text_contents,
-        voice_id="JBFqnCBsd6RMkjVDRZzb",
+        voice_id=voice_id_key,
         model_id="eleven_multilingual_v2",
         output_format="opus_48000_128",
     )
