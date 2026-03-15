@@ -7,6 +7,7 @@ import { EffectComposer, Vignette } from '@react-three/postprocessing';
 import { Mic, Menu, Users, X, ChevronRight, MessageSquare, ArrowLeft, Eye, EyeOff, LogOut, Search, UserPlus, Check, Clock, UserCheck, User } from 'lucide-react';
 import ForceGraph3D from 'react-force-graph-3d';
 import { useConversation } from '@elevenlabs/react';
+import { ForumRecordingOverlay } from './ForumRecordingOverlay';
 
 /* Prerequisites:
   npm install framer-motion three @react-three/fiber @react-three/drei lucide-react @react-three/postprocessing react-force-graph-3d @elevenlabs/react
@@ -943,6 +944,168 @@ const RegisterScreen = ({ onRegister, onGoToLogin }) => {
   );
 };
 
+// --- Forum Tab Component ---
+const ForumTab = ({ currentUser }) => {
+  const [recommendedQuestion, setRecommendedQuestion] = useState(null);
+  const [myQuestions, setMyQuestions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchForumData = useCallback(async () => {
+    if (!currentUser?.username) return;
+    setLoading(true);
+    try {
+      const [recRes, myRes] = await Promise.all([
+        fetch(`${FORUM_BASE}/get_question/${encodeURIComponent(currentUser.username)}`),
+        fetch(`http://127.0.0.1:8000/db/forum-posts?author_id=${encodeURIComponent(currentUser.id)}`),
+      ]);
+
+      const recData = await recRes.json();
+      setRecommendedQuestion(recData.question ?? null);
+
+      if (myRes.ok) {
+        const myData = await myRes.json();
+        setMyQuestions(Array.isArray(myData) ? myData : myData.posts ?? []);
+      }
+    } catch (err) {
+      console.warn('Forum fetch failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser]);
+
+  useEffect(() => { fetchForumData(); }, [fetchForumData]);
+
+  const formatDate = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  return (
+    <motion.div
+      key="forum-view"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      transition={{ duration: 0.4, ease: 'easeInOut' }}
+      style={{
+        position: 'absolute', inset: 0, zIndex: 10,
+        background: 'var(--bg-colour)',
+        overflowY: 'auto',
+        padding: 'max(100px, env(safe-area-inset-top)) 24px max(120px, env(safe-area-inset-bottom)) 24px',
+        display: 'flex', flexDirection: 'column', gap: 32,
+      }}
+    >
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#878787', fontSize: 13, paddingTop: 20 }}>
+          <span className="auth-spinner" style={{ borderTopColor: '#878787', borderColor: 'rgba(0,0,0,0.1)' }} />
+          Loading forum...
+        </div>
+      ) : (
+        <>
+          {/* ── Recommended question ── */}
+          <div>
+            <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#878787', margin: '0 0 12px 4px' }}>
+              Answer this
+            </p>
+            {recommendedQuestion ? (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+                style={{
+                  background: '#0a0a0a',
+                  borderRadius: 20,
+                  padding: '24px 24px 20px',
+                  color: '#fafafa',
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+              >
+                <div style={{
+                  position: 'absolute', top: -40, right: -40,
+                  width: 160, height: 160, borderRadius: '50%',
+                  border: '1px solid rgba(255,255,255,0.07)',
+                  pointerEvents: 'none',
+                }} />
+                <div style={{
+                  position: 'absolute', top: -20, right: -20,
+                  width: 100, height: 100, borderRadius: '50%',
+                  border: '1px solid rgba(255,255,255,0.05)',
+                  pointerEvents: 'none',
+                }} />
+                <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.4)', margin: '0 0 10px 0' }}>
+                  {recommendedQuestion.authorUsername ?? 'Community'}
+                </p>
+                <p style={{ fontSize: 18, fontWeight: 600, color: '#fafafa', margin: '0 0 16px 0', lineHeight: 1.45, letterSpacing: '-0.01em' }}>
+                  {recommendedQuestion.questionText}
+                </p>
+                <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', margin: 0 }}>
+                  {formatDate(recommendedQuestion.createdAt)}
+                </p>
+              </motion.div>
+            ) : (
+              <div style={{
+                borderRadius: 20, padding: '20px 24px',
+                border: '1px dashed rgba(0,0,0,0.1)',
+                color: '#878787', fontSize: 14, lineHeight: 1.5,
+              }}>
+                You've answered everything — check back later.
+              </div>
+            )}
+          </div>
+
+          {/* ── My questions ── */}
+          <div>
+            <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#878787', margin: '0 0 12px 4px' }}>
+              Your questions
+            </p>
+            {myQuestions.length === 0 ? (
+              <p style={{ fontSize: 14, color: '#878787', fontStyle: 'italic', padding: '4px' }}>
+                You haven't asked anything yet.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {myQuestions.map((q, i) => (
+                  <motion.div
+                    key={q.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    style={{
+                      background: 'rgba(255,255,255,0.8)',
+                      border: '1px solid rgba(0,0,0,0.07)',
+                      borderRadius: 16,
+                      padding: '16px 20px',
+                    }}
+                  >
+                    <p style={{ fontSize: 15, fontWeight: 500, color: '#0a0a0a', margin: '0 0 8px 0', lineHeight: 1.45 }}>
+                      {q.questionText}
+                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ fontSize: 11, color: '#878787' }}>{formatDate(q.createdAt)}</span>
+                      {q.answerCount > 0 && (
+                        <span style={{
+                          fontSize: 11, fontWeight: 600,
+                          color: '#0a0a0a',
+                          background: 'rgba(0,0,0,0.06)',
+                          borderRadius: 20, padding: '3px 10px',
+                        }}>
+                          {q.answerCount} {q.answerCount === 1 ? 'answer' : 'answers'}
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </motion.div>
+  );
+};
+
 // --- 11. Daily Summary Prompt ---
 const DailySummaryPrompt = ({ onYes, onNo }) => (
   <AnimatePresence>
@@ -1172,6 +1335,9 @@ const RecordingSession = ({ currentUser, audioRef ,onDone }) => {
   const analyserRef = useRef(null);
   const silenceCheckRef = useRef(null);
   const streamRef = useRef(null);
+  const [forumOverlayVisible, setForumOverlayVisible] = useState(false);
+  const analyserNodeRef = useRef(null);
+  const audioContextForRecRef = useRef(null);
 
   // Speak a prompt then start recording
   const speakPromptThenRecord = useCallback(async () => {
@@ -1214,87 +1380,6 @@ const RecordingSession = ({ currentUser, audioRef ,onDone }) => {
     }
     setRecordingPhase('processing');
   }, []);
-  
-  const startDailyRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recordingStreamRef.current = stream;
-      recordingChunksRef.current = [];
-  
-      const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
-        ? 'audio/ogg;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-  
-      const mr = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef2.current = mr;
-      mr.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        try {
-          setRecordingPhase('uploading');
-          const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
-          const blob = new Blob(recordingChunksRef.current, { type: mimeType });
-          const duration = Math.floor((Date.now() - recordingStartRef.current) / 1000);
-          const today = new Date().toISOString().split('T')[0];
-          const uploadForm = new FormData();
-          uploadForm.append('user_id', currentUserRef.current.id);
-          uploadForm.append('date', today);
-          uploadForm.append('duration_sec', String(duration));
-          uploadForm.append('audio_file', blob, `daily-note${ext}`);
-          await fetch(`${API_BASE}/daily-notes/upload`, { method: 'POST', body: uploadForm });
-          setRecordingPhase('done');
-          await speakThenAct("Got it, your daily note has been saved.", () => {
-            setRecordingPhase(null);
-            promptActionChoice();
-          });
-        } catch (err) {
-          console.warn('Upload failed:', err);
-          setRecordingPhase(null);
-          promptActionChoice();
-        }
-      };
-  
-      mr.start(100);
-      recordingStartRef.current = Date.now();
-      setRecordingPhase('recording');
-      setRecordingSeconds(0);
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingSeconds(Math.floor((Date.now() - recordingStartRef.current) / 1000));
-      }, 500);
-  
-      // Silence detection
-      audioContextRef.current = new AudioContext();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      const analyser = audioContextRef.current.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
-      const dataArray = new Uint8Array(analyser.fftSize);
-      let silenceStart = null;
-  
-      const check = () => {
-        if (mediaRecorderRef2.current?.state === 'inactive') return;
-        analyser.getByteTimeDomainData(dataArray);
-        const rms = Math.sqrt(
-          dataArray.reduce((sum, val) => sum + Math.pow(val - 128, 2), 0) / dataArray.length
-        );
-        if (rms < 8) {
-          if (!silenceStart) silenceStart = Date.now();
-          else if (Date.now() - silenceStart >= 7000) { stopDailyRecording(); return; }
-        } else {
-          silenceStart = null;
-        }
-        silenceCheckRef.current = requestAnimationFrame(check);
-      };
-      silenceCheckRef.current = requestAnimationFrame(check);
-  
-    } catch (err) {
-      console.warn('Mic failed:', err);
-      setRecordingPhase(null);
-    }
-  }, [speakThenAct, stopDailyRecording, promptActionChoice]);
-
 
   useEffect(() => {
     speakPromptThenRecord();
@@ -1413,6 +1498,10 @@ const App = () => {
   const recordingStartRef = useRef(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingMode, setRecordingMode] = useState(null); // 'daily-note' | 'ask-question' | 'answer-question' | null
+
+  const [forumOverlayVisible, setForumOverlayVisible] = useState(false);
+  const analyserNodeRef = useRef(null);   // holds the live Web Audio AnalyserNode
+  const audioContextForRecRef = useRef(null); // AudioContext used during recording
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -1915,31 +2004,45 @@ const App = () => {
   const startAskQuestionRecording = useCallback(async () => {
     try {
       setRecordingMode('ask-question');
+      setActiveTab('forum');          // ← switch to forum tab
+      setForumOverlayVisible(true);   // ← show overlay
+  
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordingChunksRef.current = [];
-
+  
+      // — live waveform setup —
+      audioContextForRecRef.current = new AudioContext();
+      const source = audioContextForRecRef.current.createMediaStreamSource(stream);
+      const analyser = audioContextForRecRef.current.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserNodeRef.current = analyser;
+  
       const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
         ? 'audio/ogg;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
-
+  
       const mr = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef2.current = mr;
-
+  
       mr.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
       mr.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
+        analyserNodeRef.current = null;
+        audioContextForRecRef.current?.close();
+  
         try {
           setRecordingPhase('processing');
           const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
           const blob = new Blob(recordingChunksRef.current, { type: mimeType });
           const transcription = await transcribeAudioBlob(blob, `forum-question${ext}`);
           if (!transcription) throw new Error('No transcription captured');
-
+  
           const username = currentUserRef.current?.username;
           if (!username) throw new Error('No active user');
-
+  
           setRecordingPhase('uploading');
           const res = await fetch(
             `${FORUM_BASE}/ask_question/${encodeURIComponent(username)}`,
@@ -1953,21 +2056,23 @@ const App = () => {
             const errText = await res.text();
             throw new Error(`Ask question failed: ${res.status} ${errText}`);
           }
-
+  
           setRecordingPhase('done');
           await speakThenAct("Great question. I've posted it to the forum.", () => {
             setRecordingPhase(null);
             setRecordingMode(null);
+            setForumOverlayVisible(false);  // ← hide overlay
             promptActionChoice();
           });
         } catch (err) {
           console.warn('Ask question flow failed:', err);
           setRecordingPhase(null);
           setRecordingMode(null);
+          setForumOverlayVisible(false);
           promptActionChoice();
         }
       };
-
+  
       mr.start(100);
       recordingStartRef.current = Date.now();
       setRecordingPhase('recording');
@@ -1979,6 +2084,7 @@ const App = () => {
       console.warn('Mic failed:', err);
       setRecordingPhase(null);
       setRecordingMode(null);
+      setForumOverlayVisible(false);
     }
   }, [promptActionChoice, speakThenAct, transcribeAudioBlob]);
 
@@ -2772,11 +2878,7 @@ const App = () => {
                   )}
 
                   {appState === 'main' && activeTab === 'forum' && (
-                    <motion.div key="forum-view" className="forum-placeholder" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.4, ease: "easeInOut" }}>
-                      <MessageSquare size={48} color="var(--text-secondary)" strokeWidth={1} />
-                      <h2>Community Forum</h2>
-                      <p>Discussions will appear here.</p>
-                    </motion.div>
+                    <ForumTab key="forum-view" currentUser={currentUser} />
                   )}
 
                   {appState === 'main' && activeTab === 'voice' && (
@@ -3008,7 +3110,35 @@ const App = () => {
                   currentUser={currentUser}
                   onFriendAdded={handleRefreshFriends}
                 />
-
+                
+                {forumOverlayVisible && (
+                  <ForumRecordingOverlay
+                    mode={recordingMode}
+                    phase={recordingPhase}
+                    seconds={recordingSeconds}
+                    username={currentUser?.username}
+                    onDone={() => {
+                      clearInterval(recordingTimerRef.current);
+                      if (mediaRecorderRef2.current?.state !== 'inactive') {
+                        mediaRecorderRef2.current?.stop();
+                      }
+                    }}
+                    onCancel={() => {
+                      clearInterval(recordingTimerRef.current);
+                      analyserNodeRef.current = null;
+                      audioContextForRecRef.current?.close();
+                      if (mediaRecorderRef2.current?.state !== 'inactive') {
+                        mediaRecorderRef2.current.onstop = () => {};
+                        mediaRecorderRef2.current.stop();
+                      }
+                      setRecordingPhase(null);
+                      setRecordingMode(null);
+                      setForumOverlayVisible(false);
+                      promptActionChoice();
+                    }}
+                    analyserNode={analyserNodeRef.current}
+                  />
+                )}
 
                 {showRecordPrompt && (
                   <RecordDailySummaryPrompt
