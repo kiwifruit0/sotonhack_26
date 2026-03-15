@@ -16,7 +16,7 @@ def output_speech(user_id, text_contents):
         text=text_contents,
         voice_id="JBFqnCBsd6RMkjVDRZzb",
         model_id="eleven_multilingual_v2",
-        output_format="mp3_44100_128",
+        output_format="opus_48000_128",
     )
     return audio
 
