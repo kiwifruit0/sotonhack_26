@@ -25,7 +25,7 @@ async def collate_summaries(username):
         if not note:
             print("No daily note found for" , name)
             continue
-        notes_text = " ".join(note.get("content", "") for note in notes)
+        
         try:
             intro_generator = await output_speech(username, f"{name} says")
                         
