@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.routers import dotenv_router, speech_router, transcribe_router
 
-from .routers import db_router, test_router
+from .routers import db_router, test_router, forum_router
 from .utils.database import ensure_database_indexes
 
 app = FastAPI()
@@ -22,6 +22,7 @@ app.include_router(dotenv_router.router, prefix="/envs")
 app.include_router(db_router.router, prefix="/db")
 app.include_router(transcribe_router.router, prefix="/transcribe")
 app.include_router(speech_router.router, prefix="/speech")
+app.include_router(forum_router.router, prefix="/forum")
 
 
 @app.on_event("startup")

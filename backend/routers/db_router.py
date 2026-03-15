@@ -613,6 +613,23 @@ async def create_forum_answer(forum_answer: ForumAnswer):
     return _serialize_document(created_forum_answer)
 
 
+@router.get("/forum-posts/matching/{username}")
+async def list_matching_forum_posts(username: str):
+    print(f'Finding matching forum posts for username: {username}')
+    user = await _get_user_by_username(username, "username")
+    print(f'user: {user}')
+    interest_ids = user.get("interestIds", [])
+    if not interest_ids:
+        return []
+
+    cursor = forum_posts.find({"interestIds": {"$in": interest_ids}}).sort(
+        "createdAt", -1
+    )
+    print(cursor)
+
+    return [_serialize_document(post) async for post in cursor]
+
+
 @router.get("/forum-answers")
 async def list_forum_answers(post_id: str | None = Query(default=None)):
     query: dict[str, Any] = {}

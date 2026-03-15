@@ -23,7 +23,6 @@ class ForumPost(BaseModel):
 class ForumAnswer(BaseModel):
     postId: str
     authorId: str
-    audioUrl: str
     transcriptText: str
     transcriptMeta: dict
     createdAt: datetime

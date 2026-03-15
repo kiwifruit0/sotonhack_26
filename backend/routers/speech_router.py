@@ -8,7 +8,15 @@ router = APIRouter()
 
 @router.post("/categorize")
 async def categorize_text(request):
-    categories = list_interests
+    interest_documents = await list_interests()
+    categories = [
+        interest["name"]
+        for interest in interest_documents
+        if isinstance(interest.get("name"), str)
+    ]
+    if not categories:
+        return {"processed_text": ""}
+
     prompt = f"""
     Analyze the following text and categorize it into EXACTLY ONE of these categories: {', '.join(categories)}.
     Return only the category name.
@@ -16,7 +24,7 @@ async def categorize_text(request):
     Text: {request}
     """
     result = await call_gemini(prompt)
-    return {"processed_text": result}
+    return {"processed_text": result.strip()}
 
 
 @router.post("/humanize")
