@@ -1921,7 +1921,7 @@ const App = () => {
       await speakThenAct("Okay, I'll find a question for you to answer.", () => { /* answer flow */ });
     } else if (trimmed.includes('3') || trimmed.includes('record')) {
       await speakThenAct(
-        "What was your day like? Take your time, and when you're done just say I'm done or stop talking for a few seconds.",
+        "What was your day like? Take your time, and when you're done just click the done button.",
         () => startDailyRecording()
       );
     } else if (trimmed.includes('4') || trimmed.includes('listen') || trimmed.includes('summary')) {
