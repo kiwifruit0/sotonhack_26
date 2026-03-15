@@ -1718,19 +1718,44 @@ const App = () => {
   const speakThenActRef = useRef(null);
   // after speakThenAct is defined:
   speakThenActRef.current = speakThenAct;
-    // ── 2. listenForSummaryResponse (no deps, calls handleGeneralisedChoice via ref) ──
-  const listenForSummaryResponse = useCallback(async () => {
-    setListeningForResponse(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus' : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const chunks = [];
+
+  const captureVoiceCommandText = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks = [];
+
+    let hardStopTimer = null;
+    let silenceCheckRef = null;
+    let audioContext = null;
+    let analyser = null;
+    let stopped = false;
+    const startTs = Date.now();
+
+    const cleanup = async () => {
+      if (silenceCheckRef) cancelAnimationFrame(silenceCheckRef);
+      if (hardStopTimer) clearTimeout(hardStopTimer);
+      stream.getTracks().forEach(t => t.stop());
+      if (audioContext) {
+        try { await audioContext.close(); } catch {}
+      }
+    };
+
+    const stopRecorder = () => {
+      if (stopped) return;
+      stopped = true;
+      if (recorder.state !== 'inactive') recorder.stop();
+    };
+
+    const transcription = await new Promise((resolve, reject) => {
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onerror = () => reject(new Error('Recording failed'));
       recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
+        await cleanup();
         try {
+          if (!chunks.length) { resolve(''); return; }
           const blob = new Blob(chunks, { type: mimeType });
           const formData = new FormData();
           formData.append('file', blob, 'response.webm');
@@ -1742,84 +1767,110 @@ const App = () => {
           });
           if (!sttRes.ok) throw new Error('STT failed');
           const { text } = await sttRes.json();
-      
-          // Guard: if nothing was heard, ask again
-          if (!text?.trim()) {
-            setListeningForResponse(false);
-            await speakThenActRef.current?.(
-              "Sorry, I didn't catch that. Would you like to hear your daily summary?",
-              () => listenForSummaryResponseRef.current?.()
-            );
-            return;
-          }
-      
-          const genRes = await fetch(
-            `http://127.0.0.1:8000/speech/yes_or_no?text=${encodeURIComponent(text)}`,
-            { method: 'POST' }
-          );
-          if (!genRes.ok) {
-            const errText = await genRes.text();
-            throw new Error(`yes_or_no failed: ${genRes.status} ${errText}`);
-          }
-          const choice = await genRes.json();
-          handleGeneralisedChoiceRef.current?.(choice);
+          resolve((text || '').trim());
         } catch (err) {
-          console.warn('Response processing failed:', err);
-          setListeningForResponse(false);
-          setSummaryPhase(null);
+          reject(err);
         }
       };
-      recorder.start();
-      setTimeout(() => recorder.stop(), 4000);
-    } catch (err) {
-      console.warn('Mic failed:', err);
-      setListeningForResponse(false);
-    }
+
+      recorder.start(100);
+      hardStopTimer = setTimeout(stopRecorder, 3000);
+
+      try {
+        audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.fftSize);
+        let silenceStart = null;
+
+        const checkSilence = () => {
+          if (recorder.state === 'inactive') return;
+          analyser.getByteTimeDomainData(dataArray);
+          const rms = Math.sqrt(
+            dataArray.reduce((sum, val) => sum + Math.pow(val - 128, 2), 0) / dataArray.length
+          );
+          const elapsed = Date.now() - startTs;
+          if (elapsed >= 700) {
+            if (rms < 8) {
+              if (!silenceStart) silenceStart = Date.now();
+              else if (Date.now() - silenceStart >= 650) {
+                stopRecorder();
+                return;
+              }
+            } else {
+              silenceStart = null;
+            }
+          }
+          silenceCheckRef = requestAnimationFrame(checkSilence);
+        };
+        silenceCheckRef = requestAnimationFrame(checkSilence);
+      } catch (err) {
+        console.warn('Silence detection unavailable, using timeout only.', err);
+      }
+    });
+
+    return transcription;
   }, []);
+
+  // ── 2. listenForSummaryResponse (no deps, calls handleGeneralisedChoice via ref) ──
+  const listenForSummaryResponse = useCallback(async () => {
+    setListeningForResponse(true);
+    try {
+      const text = await captureVoiceCommandText();
+
+      if (!text) {
+        setListeningForResponse(false);
+        await speakThenActRef.current?.(
+          "Sorry, I didn't catch that. Would you like to hear your daily summary?",
+          () => listenForSummaryResponseRef.current?.()
+        );
+        return;
+      }
+
+      const genRes = await fetch(
+        `http://127.0.0.1:8000/speech/yes_or_no?text=${encodeURIComponent(text)}`,
+        { method: 'POST' }
+      );
+      if (!genRes.ok) {
+        const errText = await genRes.text();
+        throw new Error(`yes_or_no failed: ${genRes.status} ${errText}`);
+      }
+      const choice = await genRes.json();
+      handleGeneralisedChoiceRef.current?.(choice);
+    } catch (err) {
+      console.warn('Response processing failed:', err);
+      setListeningForResponse(false);
+      setSummaryPhase(null);
+    }
+  }, [captureVoiceCommandText]);
 
   // ── 3. listenForActionChoice (no deps, calls handleActionChoice via ref) ─────
   const listenForActionChoice = useCallback(async () => {
     setListeningForResponse(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus' : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const chunks = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        try {
-          const blob = new Blob(chunks, { type: mimeType });
-          const formData = new FormData();
-          formData.append('file', blob, 'response.webm');
-          formData.append('model_id', 'scribe_v1');
-          const sttRes = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
-            method: 'POST',
-            headers: { 'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY },
-            body: formData,
-          });
-          if (!sttRes.ok) throw new Error('STT failed');
-          const { text } = await sttRes.json();
-          const genRes = await fetch(
-            `http://127.0.0.1:8000/speech/generalise?text=${encodeURIComponent(text)}`,
-            { method: 'POST' }
-          );
-          if (!genRes.ok) throw new Error('Generalise failed');
-          const choice = await genRes.json();
-          handleActionChoiceRef.current?.(choice); // via ref — not yet defined
-        } catch (err) {
-          console.warn('Action choice processing failed:', err);
-          setListeningForResponse(false);
-        }
-      };
-      recorder.start();
-      setTimeout(() => recorder.stop(), 4000);
+      const text = await captureVoiceCommandText();
+      if (!text) {
+        setListeningForResponse(false);
+        await speakThenActRef.current?.(
+          "Sorry, I didn't catch that. Please say your choice again.",
+          () => listenForActionChoiceRef.current?.()
+        );
+        return;
+      }
+      const genRes = await fetch(
+        `http://127.0.0.1:8000/speech/generalise?text=${encodeURIComponent(text)}`,
+        { method: 'POST' }
+      );
+      if (!genRes.ok) throw new Error('Generalise failed');
+      const choice = await genRes.json();
+      handleActionChoiceRef.current?.(choice); // via ref — not yet defined
     } catch (err) {
-      console.warn('Mic failed:', err);
+      console.warn('Action choice processing failed:', err);
       setListeningForResponse(false);
     }
-  }, []);
+  }, [captureVoiceCommandText]);
 
   // ── 4. promptActionChoice (depends on speakThenAct only, calls listen via ref) ──
   const promptActionChoice = useCallback(async () => {
