@@ -13,11 +13,11 @@ elevenlabs = ElevenLabs(
 client = genai.Client()
 MODEL_ID = "gemini-2.5-flash-lite"
 
-def output_speech(username, text_contents):
+async def output_speech(username, text_contents):
     voice_id_key="JBFqnCBsd6RMkjVDRZzb"
-    user = _get_user_by_username(username, "username")
-    if user.voiceId:
-        voice_id_key = user.voiceId
+    user = await _get_user_by_username(username, "username")
+    if user["voiceId"]:
+        voice_id_key = user["voiceId"]
 
 
     audio = elevenlabs.text_to_speech.convert(

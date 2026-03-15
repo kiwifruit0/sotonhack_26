@@ -1,4 +1,4 @@
-from ..controllers.speech_controller import call_gemini
+from ..controllers.speech_controller import call_gemini, output_speech
 from fastapi import APIRouter, Query
 from ..controllers.daily_summary_controller import collate_summaries
 from .db_router import list_interests
@@ -40,6 +40,7 @@ async def daily_summary(username: str = Query(...)):
         media_type="audio/ogg",
     )
 
+@router.post("/generalise")
 async def generalise_answer(text):
     prompt = f"""
     Determine the user's choice from their input.
@@ -56,3 +57,7 @@ async def generalise_answer(text):
     """
     result = await call_gemini(prompt)
     return result
+
+@router.post("/text_to_speech")
+async def text_to_speech(username, text):
+    return await output_speech(username, text)
