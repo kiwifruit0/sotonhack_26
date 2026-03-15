@@ -1,15 +1,16 @@
 from ..controllers.speech_controller import call_gemini
 from fastapi import APIRouter, Query
 from ..controllers.daily_summary_controller import collate_summaries
+from .db_router import list_interests
 from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
 @router.post("/categorize")
 async def categorize_text(request):
-    categories = ""
+    categories = list_interests
     prompt = f"""
-    Analyze the following text and categorize it into EXACTLY ONE of these categories: {', '.join("")}.
+    Analyze the following text and categorize it into EXACTLY ONE of these categories: {', '.join(categories)}.
     Return only the category name.
 
     Text: {request}
@@ -21,8 +22,9 @@ async def categorize_text(request):
 @router.post("/humanize")
 async def humanize_text(text):
     prompt = f"""
-    Rewrite the following text to sound more natural and conversational. 
-    Avoid robotic phrasing or overly formal jargon while maintaining the original content.
+    You are an API which returns ONE option.
+    Rewrite the following text to sound more transitional between quotes. 
+    Avoid robotic phrasing or overly formal jargon while maintaining the original user quote.
 
     Input: {text}
     """
@@ -37,3 +39,16 @@ async def daily_summary(username: str = Query(...)):
         buf,
         media_type="audio/ogg",
     )
+
+async def generalise_answer(text):
+    prompt = f"""
+    Determine the user's choice from their input.
+    There are TWO options:
+    Yes
+    No
+    Pick ONE option from the given choices.
+
+    Input: {text}
+    """
+    result = await call_gemini(prompt)
+    return result
