@@ -25,6 +25,7 @@ async def collate_summaries(user):
     intro_generator = output_speech(None, "Here's what your friends are up to")
     intro_bytes = b"".join(intro_generator)
     combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
+    combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
 
     for entry in summaries:
         name = entry["friend"]["username"]
@@ -47,6 +48,7 @@ async def collate_summaries(user):
             continue
 
     buf = io.BytesIO()
+    combined_audio.export(buf, format="ogg")
     combined_audio.export(buf, format="ogg")
     buf.seek(0)
     return buf
