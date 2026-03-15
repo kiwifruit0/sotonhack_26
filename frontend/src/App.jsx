@@ -4,7 +4,7 @@ import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motio
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Torus, Sparkles, MeshDistortMaterial, Float, Environment, Html } from '@react-three/drei';
 import { EffectComposer, Vignette } from '@react-three/postprocessing';
-import { Mic, Menu, Users, X, ChevronRight, MessageSquare, ArrowLeft, Eye, EyeOff, LogOut, Search, UserPlus, Check, Clock, UserCheck } from 'lucide-react';
+import { Mic, Menu, Users, X, ChevronRight, MessageSquare, ArrowLeft, Eye, EyeOff, LogOut, Search, UserPlus, Check, Clock, UserCheck, User } from 'lucide-react';
 import ForceGraph3D from 'react-force-graph-3d';
 import { useConversation } from '@elevenlabs/react';
 
@@ -603,29 +603,58 @@ const FriendsListOverlay = ({ friends, isLoading, isOpen, onClose, onSelectFrien
 // --- 7. Setup Screen Component ---
 const SetupScreen = ({ onComplete, currentUser }) => {
   const [selectedInterests, setSelectedInterests] = useState([]);
+  const [availableInterests, setAvailableInterests] = useState([]);
+  const [loadingInterests, setLoadingInterests] = useState(true);
   const [saving, setSaving] = useState(false);
-  const interests = ["Architecture", "Minimalism", "Acoustics", "Creative Coding", "Typography", "Web3", "Industrial Design", "Photography"];
+  const [error, setError] = useState('');
 
-  const toggleInterest = (interest) => {
-    setSelectedInterests(prev => prev.includes(interest) ? prev.filter(i => i !== interest) : [...prev, interest]);
+  // Fetch interests from DB on mount
+  useEffect(() => {
+    const fetchInterests = async () => {
+      setLoadingInterests(true);
+      try {
+        const res = await fetch(`${API_BASE}/interests`);
+        if (!res.ok) throw new Error('Failed to load interests');
+        const data = await res.json();
+        setAvailableInterests(data);
+      } catch (err) {
+        setError('Could not load interests. Please try again.');
+      } finally {
+        setLoadingInterests(false);
+      }
+    };
+    fetchInterests();
+  }, []);
+
+  const toggleInterest = (interestName) => {
+    setSelectedInterests(prev =>
+      prev.includes(interestName)
+        ? prev.filter(n => n !== interestName)
+        : [...prev, interestName]
+    );
   };
 
   const handleContinue = async () => {
-    if (currentUser?.id && selectedInterests.length > 0) {
-      setSaving(true);
-      try {
-        await fetch(`${API_BASE}/users/${currentUser.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ interestIds: selectedInterests }),
-        });
-      } catch (err) {
-        console.warn('Could not save interests:', err);
-      } finally {
-        setSaving(false);
+    if (!currentUser?.username || selectedInterests.length === 0) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/users/${encodeURIComponent(currentUser.username)}/interests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interestNames: selectedInterests }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to save interests');
       }
+    } catch (err) {
+      console.warn('Could not save interests:', err);
+      setError(err.message || 'Something went wrong.');
+    } finally {
+      setSaving(false);
+      onComplete();
     }
-    onComplete();
   };
 
   const containerVariants = {
@@ -645,24 +674,41 @@ const SetupScreen = ({ onComplete, currentUser }) => {
         <h2>Curate your space.</h2>
         <p>Select your interests to tailor your voice feed.</p>
       </motion.div>
-      <div className="interests-grid">
-        {interests.map(interest => (
-          <motion.button
-            key={interest} variants={itemVariants}
-            whileHover={{ scale: 1.05, y: -2 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => toggleInterest(interest)}
-            className={`interest-pill ${selectedInterests.includes(interest) ? 'selected' : ''}`}
-          >
-            {interest}
-          </motion.button>
-        ))}
-      </div>
+
+      {loadingInterests ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#878787', fontSize: 14 }}>
+          <span className="auth-spinner" style={{ borderTopColor: '#878787', borderColor: 'rgba(0,0,0,0.1)' }} />
+          Loading interests...
+        </div>
+      ) : error && availableInterests.length === 0 ? (
+        <p style={{ color: '#c0392b', fontSize: 14 }}>{error}</p>
+      ) : (
+        <div className="interests-grid">
+          {availableInterests.map(interest => (
+            <motion.button
+              key={interest.id}
+              variants={itemVariants}
+              whileHover={{ scale: 1.05, y: -2 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => toggleInterest(interest.name)}
+              className={`interest-pill ${selectedInterests.includes(interest.name) ? 'selected' : ''}`}
+            >
+              {interest.name}
+            </motion.button>
+          ))}
+        </div>
+      )}
+
       <AnimatePresence>
+        {error && availableInterests.length > 0 && (
+          <motion.p className="auth-error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            {error}
+          </motion.p>
+        )}
         {selectedInterests.length > 0 && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} className="setup-footer">
             <MagneticButton className="continue-btn" hoverScale={1.03} onClick={handleContinue}>
-              {saving ? 'Saving...' : 'Continue to Echo'}
+              {saving ? 'Saving...' : `Continue to Echo (${selectedInterests.length} selected)`}
             </MagneticButton>
           </motion.div>
         )}
@@ -891,6 +937,81 @@ const DailySummaryPrompt = ({ onYes, onNo }) => (
   </AnimatePresence>
 );
 
+// --- 11b. Profile Tab Component ---
+const ProfileTab = ({ currentUser }) => {
+  const [userInterests, setUserInterests] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const fetchUserWithInterests = async () => {
+      setLoading(true);
+      try {
+        const [userRes, interestsRes] = await Promise.all([
+          fetch(`${API_BASE}/users/${currentUser.id}`),
+          fetch(`${API_BASE}/interests`),
+        ]);
+        const userData = await userRes.json();
+        const allInterests = await interestsRes.json();
+        const interestIdSet = new Set(userData.interestIds || []);
+        setUserInterests(allInterests.filter(i => interestIdSet.has(i.id)));
+      } catch (err) {
+        console.warn('Could not load profile interests:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUserWithInterests();
+  }, [currentUser]);
+
+  const initials = currentUser?.username
+    ? currentUser.username.slice(0, 2).toUpperCase()
+    : '??';
+
+  return (
+    <motion.div
+      key="profile-view"
+      className="profile-view"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      transition={{ duration: 0.4, ease: 'easeInOut' }}
+    >
+      <div className="profile-card">
+        <div className="profile-avatar-lg">{initials}</div>
+        <h2 className="profile-username">{currentUser?.username}</h2>
+        <p className="profile-label">Member</p>
+      </div>
+
+      <div className="profile-section">
+        <p className="profile-section-title">Interests</p>
+        {loading ? (
+          <div className="profile-loading">
+            <span className="auth-spinner" style={{ borderTopColor: '#878787', borderColor: 'rgba(0,0,0,0.1)' }} />
+            <span>Loading...</span>
+          </div>
+        ) : userInterests.length === 0 ? (
+          <p className="profile-empty">No interests added yet.</p>
+        ) : (
+          <div className="profile-interests-grid">
+            {userInterests.map((interest, i) => (
+              <motion.span
+                key={interest.id}
+                className="profile-interest-pill"
+                initial={{ opacity: 0, scale: 0.85 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.03 }}
+              >
+                {interest.name}
+              </motion.span>
+            ))}
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
 // --- 12. Main Application Component ---
 const App = () => {
   const [appState, setAppState] = useState('booting');
@@ -966,6 +1087,7 @@ const App = () => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const isListening = conversation.status === 'connected';
+  const audioRef = useRef(null); 
 
   const toggleListening = useCallback(async () => {
     if (isListening) {
@@ -1030,6 +1152,28 @@ const App = () => {
     setShowSummaryPrompt(false);
     if (isListening) conversation.endSession();
     setAppState('login');
+  };
+
+  const handleSummaryYes = async () => {
+    setShowSummaryPrompt(false);
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/speech/summary/daily?username=${encodeURIComponent(currentUser.username)}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error('Failed to fetch summary');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+      audioRef.current = new Audio(url);
+      audioRef.current.play();
+      audioRef.current.onended = () => URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Daily summary error:', err);
+    }
   };
 
   const styles = `
@@ -1402,6 +1546,71 @@ const App = () => {
     .summary-btn--yes:hover { background: #1a1a1a; box-shadow: 0 10px 24px rgba(0,0,0,0.22); }
     .summary-btn--no { background: transparent; color: var(--text-secondary); border: 1px solid rgba(0,0,0,0.08); }
     .summary-btn--no:hover { background: rgba(0,0,0,0.03); color: var(--text-primary); border-color: rgba(0,0,0,0.14); }
+
+    /* ── Profile tab ── */
+.profile-view {
+  position: absolute; inset: 0; z-index: 10;
+  background: var(--bg-colour);
+  overflow-y: auto;
+  padding: max(100px, env(safe-area-inset-top)) 24px max(120px, env(safe-area-inset-bottom)) 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+}
+.profile-view::-webkit-scrollbar { display: none; }
+.profile-card {
+  width: 100%; max-width: 400px;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0,0,0,0.07);
+  border-radius: 24px;
+  padding: 32px 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.05);
+}
+.profile-avatar-lg {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: var(--text-primary); color: var(--bg-colour);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 700; letter-spacing: 0.04em;
+  margin-bottom: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+}
+.profile-username {
+  font-size: 22px; font-weight: 800; letter-spacing: -0.03em;
+  color: var(--text-primary); margin: 0;
+}
+.profile-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-secondary); margin: 0;
+}
+.profile-section {
+  width: 100%; max-width: 400px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.profile-section-title {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-secondary);
+  margin: 0; padding: 0 4px;
+}
+.profile-interests-grid {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.profile-interest-pill {
+  padding: 8px 16px; border-radius: 24px;
+  background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.07);
+  font-size: 13px; font-weight: 500; color: var(--text-primary);
+  transition: var(--transition-smooth);
+}
+.profile-interest-pill:hover {
+  background: rgba(0,0,0,0.08); border-color: rgba(0,0,0,0.14);
+}
+.profile-loading {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; color: var(--text-secondary); padding: 4px;
+}
+.profile-empty {
+  font-size: 13px; color: var(--text-secondary);
+  margin: 0; padding: 4px; font-style: italic;
+}
   `;
 
   return (
@@ -1410,8 +1619,29 @@ const App = () => {
       <div className="app-wrapper">
         <AnimatePresence>
           {appState === 'booting' && (
-            <motion.div className="loading-screen" exit={{ opacity: 0, scale: 1.1, filter: 'blur(20px)', transition: { duration: 1.2, ease: "easeInOut" } }}>
-              <motion.div initial={{ opacity: 0, scale: 0.9, filter: 'blur(10px)' }} animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }} transition={{ duration: 1.5, ease: "easeOut" }} className="loading-text">
+            <motion.div
+              className="loading-screen"
+              exit={{ opacity: 0, scale: 1.1, filter: 'blur(20px)', transition: { duration: 1.2, ease: "easeInOut" } }}
+            >
+              <img
+                src="/GoogleSearchImage.svg"
+                alt=""
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  width: '700px',
+                  height: '700px',
+                  opacity: 0.06,
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                }}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, filter: 'blur(10px)' }}
+                animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                transition={{ duration: 1.5, ease: "easeOut" }}
+                className="loading-text"
+              >
                 E C H O
               </motion.div>
             </motion.div>
@@ -1425,6 +1655,9 @@ const App = () => {
             )}
             {appState === 'register' && (
               <RegisterScreen key="register" onRegister={handleRegister} onGoToLogin={() => setAppState('login')} />
+            )}
+            {appState === 'main' && activeTab === 'profile' && (
+              <ProfileTab key="profile-view" currentUser={currentUser} />
             )}
           </AnimatePresence>
 
@@ -1515,7 +1748,7 @@ const App = () => {
 
                 {showSummaryPrompt && (
                   <DailySummaryPrompt
-                    onYes={() => setShowSummaryPrompt(false)}
+                    onYes={handleSummaryYes}
                     onNo={() => setShowSummaryPrompt(false)}
                   />
                 )}
@@ -1538,6 +1771,10 @@ const App = () => {
                       <MagneticButton isActive={activeTab === 'forum'} className="nav-item" ariaLabel="Community Forum" hoverScale={1.15} onClick={() => { setActiveTab('forum'); if (isListening) toggleListening(); }}>
                         <MessageSquare size={22} strokeWidth={2} />
                         {activeTab === 'forum' && <motion.div layoutId="activeTabIndicator" className="active-indicator" initial={false} transition={{ type: "spring", stiffness: 400, damping: 25 }} />}
+                      </MagneticButton>
+                      <MagneticButton isActive={activeTab === 'profile'} className="nav-item" ariaLabel="Profile" hoverScale={1.15} onClick={() => { setActiveTab('profile'); if (isListening) toggleListening(); }}>
+                        <User size={22} strokeWidth={2} />
+                        {activeTab === 'profile' && <motion.div layoutId="activeTabIndicator" className="active-indicator" initial={false} transition={{ type: "spring", stiffness: 400, damping: 25 }} />}
                       </MagneticButton>
                     </nav>
                   </motion.div>
