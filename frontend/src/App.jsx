@@ -787,6 +787,7 @@ const AuthField = ({ label, type = 'text', value, onChange, placeholder, showTog
 };
 
 const API_BASE = 'http://127.0.0.1:8000/db';
+const FORUM_BASE = 'http://127.0.0.1:8000/forum';
 
 // --- 9. Login Screen ---
 const LoginScreen = ({ onLogin, onGoToRegister }) => {
@@ -1411,6 +1412,7 @@ const App = () => {
   const recordingTimerRef = useRef(null);
   const recordingStartRef = useRef(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingMode, setRecordingMode] = useState(null); // 'daily-note' | 'ask-question' | null
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -1833,9 +1835,27 @@ const App = () => {
       mediaRecorderRef2.current?.stop();
     }
   }, []);
+
+  const transcribeAudioBlob = useCallback(async (blob, filename) => {
+    const formData = new FormData();
+    formData.append('file', blob, filename);
+    formData.append('model_id', 'scribe_v1');
+    const sttRes = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+      method: 'POST',
+      headers: { 'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY },
+      body: formData,
+    });
+    if (!sttRes.ok) {
+      const errText = await sttRes.text();
+      throw new Error(`STT failed: ${sttRes.status} ${errText}`);
+    }
+    const { text } = await sttRes.json();
+    return (text || '').trim();
+  }, []);
   
   const startDailyRecording = useCallback(async () => {
     try {
+      setRecordingMode('daily-note');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordingChunksRef.current = [];
   
@@ -1866,11 +1886,13 @@ const App = () => {
           setRecordingPhase('done');
           await speakThenAct("Got it, your daily note has been saved.", () => {
             setRecordingPhase(null);
+            setRecordingMode(null);
             promptActionChoice();
           });
         } catch (err) {
           console.warn('Upload failed:', err);
           setRecordingPhase(null);
+          setRecordingMode(null);
           promptActionChoice();
         }
       };
@@ -1886,8 +1908,79 @@ const App = () => {
     } catch (err) {
       console.warn('Mic failed:', err);
       setRecordingPhase(null);
+      setRecordingMode(null);
     }
   }, [speakThenAct, promptActionChoice]);
+
+  const startAskQuestionRecording = useCallback(async () => {
+    try {
+      setRecordingMode('ask-question');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingChunksRef.current = [];
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+        ? 'audio/ogg;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+      const mr = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef2.current = mr;
+
+      mr.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        try {
+          setRecordingPhase('processing');
+          const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
+          const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+          const transcription = await transcribeAudioBlob(blob, `forum-question${ext}`);
+          if (!transcription) throw new Error('No transcription captured');
+
+          const username = currentUserRef.current?.username;
+          if (!username) throw new Error('No active user');
+
+          setRecordingPhase('uploading');
+          const res = await fetch(
+            `${FORUM_BASE}/ask_question/${encodeURIComponent(username)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ transcription }),
+            }
+          );
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Ask question failed: ${res.status} ${errText}`);
+          }
+
+          setRecordingPhase('done');
+          await speakThenAct("Great question. I've posted it to the forum.", () => {
+            setRecordingPhase(null);
+            setRecordingMode(null);
+            promptActionChoice();
+          });
+        } catch (err) {
+          console.warn('Ask question flow failed:', err);
+          setRecordingPhase(null);
+          setRecordingMode(null);
+          promptActionChoice();
+        }
+      };
+
+      mr.start(100);
+      recordingStartRef.current = Date.now();
+      setRecordingPhase('recording');
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(Math.floor((Date.now() - recordingStartRef.current) / 1000));
+      }, 500);
+    } catch (err) {
+      console.warn('Mic failed:', err);
+      setRecordingPhase(null);
+      setRecordingMode(null);
+    }
+  }, [promptActionChoice, speakThenAct, transcribeAudioBlob]);
 
   // ── 5. handleSummaryYes (depends on promptActionChoice) ──────────────────────
   const handleSummaryYes = useCallback(async () => {
@@ -1916,7 +2009,10 @@ const App = () => {
     setListeningForResponse(false);
     const trimmed = (typeof choice === 'string' ? choice : JSON.stringify(choice)).trim().toLowerCase();
     if (trimmed.includes('1') || trimmed.includes('ask a question')) {
-      await speakThenAct("Sure, go ahead and ask your question.", () => { /* question flow */ });
+      await speakThenAct(
+        "Sure, go ahead and ask your question. Press done when you're finished.",
+        () => startAskQuestionRecording()
+      );
     } else if (trimmed.includes('2') || trimmed.includes('answer a question')) {
       await speakThenAct("Okay, I'll find a question for you to answer.", () => { /* answer flow */ });
     } else if (trimmed.includes('3') || trimmed.includes('record')) {
@@ -1932,7 +2028,7 @@ const App = () => {
         () => listenForActionChoiceRef.current?.()
       );
     }
-  }, [speakThenAct, handleSummaryYes]);
+  }, [speakThenAct, handleSummaryYes, startAskQuestionRecording, startDailyRecording]);
 
   // ── 7. handleGeneralisedChoice (depends on speakThenAct + handleSummaryYes + promptActionChoice) ──
   const handleGeneralisedChoice = useCallback(async (choice) => {
@@ -2665,8 +2761,8 @@ const App = () => {
                                     {`${String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:${String(recordingSeconds % 60).padStart(2, '0')}`}
                                   </span>
                                 )}
-                                {recordingPhase === 'uploading' && "Saving your note…"}
-                                {recordingPhase === 'processing' && "Processing…"}
+                                {recordingPhase === 'uploading' && (recordingMode === 'ask-question' ? "Posting your question…" : "Saving your note…")}
+                                {recordingPhase === 'processing' && (recordingMode === 'ask-question' ? "Transcribing your question…" : "Processing…")}
                               </motion.p>
                             </AnimatePresence>
 
@@ -2715,6 +2811,7 @@ const App = () => {
                                         mediaRecorderRef2.current?.stop();
                                       }
                                       setRecordingPhase(null);
+                                      setRecordingMode(null);
                                     }}
                                     style={{
                                       padding: '12px 24px',
