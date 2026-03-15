@@ -1,24 +1,21 @@
-from ..utils.dotenv_utils import get_elevenlabs_key
-from ..routers.db_router import _get_user_by_username
-
 from elevenlabs.client import ElevenLabs
 from elevenlabs.play import play
-
 from fastapi import HTTPException
 from google import genai
 
-elevenlabs = ElevenLabs(
-  api_key=get_elevenlabs_key()
-)
+from ..routers.db_router import _get_user_by_username
+from ..utils.dotenv_utils import get_elevenlabs_key
+
+elevenlabs = ElevenLabs(api_key=get_elevenlabs_key())
 client = genai.Client()
 MODEL_ID = "gemini-2.5-flash"
 
+
 async def output_speech(username, text_contents):
-    voice_id_key="JBFqnCBsd6RMkjVDRZzb"
+    voice_id_key = "JBFqnCBsd6RMkjVDRZzb"
     user = await _get_user_by_username(username, "username")
     if user["voiceId"]:
         voice_id_key = user["voiceId"]
-
 
     audio = elevenlabs.text_to_speech.convert(
         text=text_contents,
@@ -45,10 +42,7 @@ async def output_speech(username, text_contents):
 async def call_gemini(prompt):
     """Helper to handle the API call and basic error checking."""
     try:
-        response = client.models.generate_content(
-            model=MODEL_ID,
-            contents=prompt
-        )
+        response = client.models.generate_content(model=MODEL_ID, contents=prompt)
         return response.text.strip()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Provider Error: {str(e)}")

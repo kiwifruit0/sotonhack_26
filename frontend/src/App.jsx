@@ -1824,7 +1824,7 @@ const App = () => {
   // ── 4. promptActionChoice (depends on speakThenAct only, calls listen via ref) ──
   const promptActionChoice = useCallback(async () => {
     await speakThenAct(
-      "What would you like to do? You can ask a question, answer a question, record your daily note, or listen to your post summary.",
+      "What would you like to do? You can ask or answer a public question, record your daily note, or listen to your post summary.",
       () => listenForActionChoiceRef.current?.()
     );
   }, [speakThenAct]);
