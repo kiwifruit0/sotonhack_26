@@ -1,10 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import test_router, db_router
+from backend.routers import dotenv_router, transcribe_router
+
+from .routers import db_router, test_router
 from .utils.database import ensure_database_indexes
-from backend.routers import dotenv_router
-from backend.routers import transcribe_router 
 
 app = FastAPI()
 
