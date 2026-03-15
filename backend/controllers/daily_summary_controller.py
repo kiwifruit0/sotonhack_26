@@ -1,9 +1,15 @@
 import io
 
 from pydub import AudioSegment
-from .speech_controller import output_speech
-from ..routers.db_router import fetch_daily_summary, get_audio_segment_from_audio_path, list_forum_posts, list_forum_answers, _get_user_by_username
 
+from ..routers.db_router import (
+    _get_user_by_username,
+    fetch_daily_summary,
+    get_audio_segment_from_audio_path,
+    list_forum_answers,
+    list_forum_posts,
+)
+from .speech_controller import output_speech
 
 short_pause = AudioSegment.silent(duration=500)
 long_pause = AudioSegment.silent(duration=1250)
@@ -15,12 +21,16 @@ async def collate_summaries(username):
     combined_audio = AudioSegment.empty()
 
     if summaries == []:
-        intro_generator = await output_speech(username, "There are no summaries from your friends to read.")
+        intro_generator = await output_speech(
+            username, "There are no summaries from your friends to read."
+        )
         intro_bytes = b"".join(intro_generator)
         combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
 
     else:
-        intro_generator = await output_speech(username, "Here's what your friends are up to")
+        intro_generator = await output_speech(
+            username, "Here's what your friends are up to"
+        )
         intro_bytes = b"".join(intro_generator)
         combined_audio += AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
 
@@ -29,17 +39,15 @@ async def collate_summaries(username):
         name = entry["friend"]["username"]
         note = entry["dailyNotes"]
         if not note:
-            print("No daily note found for" , name)
+            print("No daily note found for", name)
             continue
 
         try:
             intro_generator = await output_speech(username, f"{name} says")
-                        
-                        
+
             intro_bytes = b"".join(intro_generator)
             intro_seg = AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
             summary = await get_audio_segment_from_audio_path(note[0]["audioPath"])
-
 
             combined_audio += intro_seg + short_pause + summary + long_pause
             print("note added")
@@ -52,19 +60,22 @@ async def collate_summaries(username):
     buf.seek(0)
     return buf
 
+
 async def collate_forum_answers(username):
     posts = await list_forum_posts(username)
-    recent_post = dict(sorted(posts.items(), key=lambda item: item[1].createdAt, reverse=True))[0]
+    recent_post = sorted(posts, key=lambda x: x["createdAt"], reverse=True)[0]
 
     combined_audio = AudioSegment.empty()
 
     post_answers = await list_forum_answers(recent_post["postId"])
     if post_answers == {}:
-        intro_generator = await output_speech(username, f"No one has answered your post yet.")
+        intro_generator = await output_speech(
+            username, f"No one has answered your post yet."
+        )
         intro_bytes = b"".join(intro_generator)
         intro_seg = AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
         combined_audio += intro_seg
-        
+
     for answer in post_answers:
         print(answer)
 
@@ -72,12 +83,14 @@ async def collate_forum_answers(username):
             print("No answers found for your post", username)
             continue
 
-        try:            
-            intro_generator = await output_speech(answer["authorId"], f"{answer["authorId"]} said {answer["transcriptText"]}")
+        try:
+            intro_generator = await output_speech(
+                answer["authorId"],
+                f"{answer['authorId']} said {answer['transcriptText']}",
+            )
 
             intro_bytes = b"".join(intro_generator)
             intro_seg = AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
-            
 
             combined_audio += intro_seg + long_pause
             print("forumanswer")
