@@ -2938,7 +2938,7 @@ const App = () => {
                   <Menu size={20} color="var(--text-primary)" strokeWidth={1.5} />
                 </MagneticButton>
                 <motion.h1 className="logo-text" initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.5 }}>
-                  {currentUser ? currentUser.username : 'Echo'}
+                  {currentUser ? currentUser.username + "'s space" : 'Echo'}
                 </motion.h1>
                 <MagneticButton className="header-icon" ariaLabel="Log out" hoverScale={1.1} onClick={handleLogout}>
                   <LogOut size={18} color="var(--text-primary)" strokeWidth={1.5} />
