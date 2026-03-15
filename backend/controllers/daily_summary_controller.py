@@ -19,7 +19,7 @@ async def collate_summaries(username):
     summaries = result["friendSummaries"]
     combined_audio = AudioSegment.empty()
 
-    if summaries == []:
+    if not summaries:
         intro_generator = await output_speech(
             username, "There are no summaries from your friends to read."
         )
