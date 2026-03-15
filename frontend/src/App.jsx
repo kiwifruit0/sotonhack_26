@@ -1012,6 +1012,196 @@ const ProfileTab = ({ currentUser }) => {
   );
 };
 
+// --- 11c. Record Daily Summary Prompt ---
+const RecordDailySummaryPrompt = ({ onYes, onNo }) => (
+  <AnimatePresence>
+    <motion.div className="summary-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
+      <motion.div className="summary-card" initial={{ opacity: 0, y: 32, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.97 }} transition={{ type: 'spring', stiffness: 320, damping: 28, delay: 0.05 }}>
+        <div className="summary-ring" aria-hidden />
+        <motion.div className="summary-icon" initial={{ scale: 0.7, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 400, damping: 20, delay: 0.15 }}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>
+          </svg>
+        </motion.div>
+        <motion.h3 className="summary-title" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>Record Today</motion.h3>
+        <motion.p className="summary-body" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.27 }}>Would you like to record your daily note? Tell Echo how your day went.</motion.p>
+        <motion.div className="summary-actions" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.34 }}>
+          <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={onYes}>Yes, record now</motion.button>
+          <motion.button className="summary-btn summary-btn--no" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={onNo}>Maybe later</motion.button>
+        </motion.div>
+      </motion.div>
+    </motion.div>
+  </AnimatePresence>
+);
+
+// --- 11d. Recording Session ---
+const RecordingSession = ({ currentUser, onDone }) => {
+  const [phase, setPhase] = useState('idle'); // idle | recording | uploading | done | error
+  const [seconds, setSeconds] = useState(0);
+  const [errorMsg, setErrorMsg] = useState('');
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+  const startTimeRef = useRef(null);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunksRef.current = [];
+      // Prefer OGG/Opus; fall back to whatever the browser supports
+      const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+        ? 'audio/ogg;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const mr = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        handleUpload(mimeType);
+      };
+      mr.start(100);
+      startTimeRef.current = Date.now();
+      setPhase('recording');
+      timerRef.current = setInterval(() => {
+        setSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }, 500);
+    } catch (err) {
+      setErrorMsg('Microphone access denied.');
+      setPhase('error');
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    clearInterval(timerRef.current);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setPhase('uploading');
+  }, []);
+
+  const handleUpload = useCallback(async (mimeType) => {
+    try {
+      const ext = mimeType.includes('ogg') ? '.ogg' : '.webm';
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const duration = Math.floor((Date.now() - startTimeRef.current) / 1000);
+      const today = new Date().toISOString().split('T')[0];
+
+      const form = new FormData();
+      form.append('user_id', currentUser.id);
+      form.append('date', today);
+      form.append('duration_sec', String(duration));
+      form.append('audio_file', blob, `daily-note${ext}`);
+
+      const res = await fetch(`${API_BASE}/daily-notes/upload`, {
+        method: 'POST',
+        body: form,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'Upload failed');
+      }
+      setPhase('done');
+      setTimeout(onDone, 1400);
+    } catch (err) {
+      setErrorMsg(err.message || 'Upload failed.');
+      setPhase('error');
+    }
+  }, [currentUser, onDone]);
+
+  useEffect(() => () => clearInterval(timerRef.current), []);
+
+  const formatTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  return (
+    <AnimatePresence>
+      <motion.div className="summary-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
+        <motion.div className="summary-card" initial={{ opacity: 0, y: 32, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.97 }} transition={{ type: 'spring', stiffness: 320, damping: 28 }}>
+          <div className="summary-ring" aria-hidden />
+
+          {/* Animated mic / status icon */}
+          <motion.div
+            className="summary-icon"
+            animate={phase === 'recording' ? { scale: [1, 1.12, 1], boxShadow: ['0 8px 20px rgba(0,0,0,0.16)', '0 8px 28px rgba(0,0,0,0.28)', '0 8px 20px rgba(0,0,0,0.16)'] } : {}}
+            transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
+            initial={{ scale: 0.7, opacity: 0 }}
+            whileInView={{ scale: 1, opacity: 1 }}
+          >
+            {phase === 'done' ? (
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            ) : phase === 'error' ? (
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            ) : (
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            )}
+          </motion.div>
+
+          <motion.h3 className="summary-title" animate={{}} transition={{}}>
+            {phase === 'idle' && 'How was your day?'}
+            {phase === 'recording' && 'Recording…'}
+            {phase === 'uploading' && 'Saving…'}
+            {phase === 'done' && 'Saved!'}
+            {phase === 'error' && 'Something went wrong'}
+          </motion.h3>
+
+          <motion.p className="summary-body">
+            {phase === 'idle' && 'Tap the button below and speak freely. Echo will save your note.'}
+            {phase === 'recording' && (
+              <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.04em' }}>
+                {formatTime(seconds)}
+              </span>
+            )}
+            {phase === 'uploading' && 'Uploading your daily note…'}
+            {phase === 'done' && 'Your daily note has been saved.'}
+            {phase === 'error' && errorMsg}
+          </motion.p>
+
+          <motion.div className="summary-actions">
+            {phase === 'idle' && (
+              <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={startRecording}>
+                Start recording
+              </motion.button>
+            )}
+            {phase === 'recording' && (
+              <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={stopRecording}
+                style={{ background: '#c0392b' }}>
+                Stop recording
+              </motion.button>
+            )}
+            {(phase === 'uploading') && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+                <span className="auth-spinner" style={{ borderColor: 'rgba(0,0,0,0.1)', borderTopColor: 'var(--text-primary)', width: 24, height: 24 }} />
+              </div>
+            )}
+            {phase === 'error' && (
+              <>
+                <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => { setPhase('idle'); setSeconds(0); setErrorMsg(''); }}>
+                  Try again
+                </motion.button>
+                <motion.button className="summary-btn summary-btn--no" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={onDone}>
+                  Skip
+                </motion.button>
+              </>
+            )}
+            {(phase === 'idle' || phase === 'recording') && (
+              <motion.button className="summary-btn summary-btn--no" whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }} onClick={() => { stopRecording(); onDone(); }} disabled={phase === 'idle'} style={{ opacity: phase === 'idle' ? 0 : 1, pointerEvents: phase === 'idle' ? 'none' : 'auto' }}>
+                Cancel
+              </motion.button>
+            )}
+          </motion.div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 // --- 12. Main Application Component ---
 const App = () => {
   const [appState, setAppState] = useState('booting');
@@ -1024,6 +1214,9 @@ const App = () => {
 
   const [friends, setFriends] = useState([]);
   const [friendsLoading, setFriendsLoading] = useState(false);
+
+  const [showRecordPrompt, setShowRecordPrompt] = useState(false);
+  const [showRecordingSession, setShowRecordingSession] = useState(false);
 
   const fetchFriends = useCallback(async (username) => {
     if (!username) return;
@@ -1150,6 +1343,8 @@ const App = () => {
     setIsFriendsListOpen(false);
     setSelectedFriendId(null);
     setShowSummaryPrompt(false);
+    setShowRecordPrompt(false);
+    setShowRecordingSession(false);
     if (isListening) conversation.endSession();
     setAppState('login');
   };
@@ -1170,9 +1365,13 @@ const App = () => {
       }
       audioRef.current = new Audio(url);
       audioRef.current.play();
-      audioRef.current.onended = () => URL.revokeObjectURL(url);
+      audioRef.current.onended = () => {
+        URL.revokeObjectURL(url);
+        setShowRecordPrompt(true); // ← chain into record prompt after playback
+      };
     } catch (err) {
       console.error('Daily summary error:', err);
+      setShowRecordPrompt(true); // still show record prompt even on error
     }
   };
 
@@ -1749,7 +1948,21 @@ const App = () => {
                 {showSummaryPrompt && (
                   <DailySummaryPrompt
                     onYes={handleSummaryYes}
-                    onNo={() => setShowSummaryPrompt(false)}
+                    onNo={() => { setShowSummaryPrompt(false); setShowRecordPrompt(true); }}
+                  />
+                )}
+
+                {showRecordPrompt && (
+                  <RecordDailySummaryPrompt
+                    onYes={() => { setShowRecordPrompt(false); setShowRecordingSession(true); }}
+                    onNo={() => setShowRecordPrompt(false)}
+                  />
+                )}
+
+                {showRecordingSession && (
+                  <RecordingSession
+                    currentUser={currentUser}
+                    onDone={() => setShowRecordingSession(false)}
                   />
                 )}
               </main>
