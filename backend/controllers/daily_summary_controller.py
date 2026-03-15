@@ -54,11 +54,11 @@ async def collate_summaries(username):
 
 async def collate_forum_answers(username):
     posts = await list_forum_posts(username)
-    recent_post = posts.sort("createdAt", -1)[0]
+    recent_post = dict(sorted(posts.items(), key=lambda item: item[1].createdAt, reverse=True))[0]
 
     combined_audio = AudioSegment.empty()
 
-    post_answers = list_forum_answers(recent_post["postId"])
+    post_answers = await list_forum_answers(recent_post["postId"])
     if post_answers == {}:
         intro_generator = await output_speech(username, f"No one has answered your post yet.")
         intro_bytes = b"".join(intro_generator)

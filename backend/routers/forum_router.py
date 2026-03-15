@@ -1,8 +1,11 @@
 from bson import ObjectId
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, StreamingResponse
 from pydantic import BaseModel, Field
+from ..controllers.daily_summary_controller import collate_forum_answers
+from .db_router import list_interests
+
 
 from .db_router import (
     _get_user_by_username,
@@ -143,3 +146,12 @@ async def ask_question(username: str, request: ForumAskQuestionRequest):
         "interestName": selected_interest["name"],
         "interestId": selected_interest["id"],
     }
+
+
+@router.post("/forum_answers")
+async def get_forum_answers(username):
+    buf = await collate_forum_answers(username)
+    return StreamingResponse(
+        buf,
+        media_type="audio/ogg",
+    )
