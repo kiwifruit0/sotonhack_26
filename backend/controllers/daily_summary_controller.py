@@ -1,7 +1,5 @@
-import asyncio
 import io
 
-import requests
 from pydub import AudioSegment
 
 from ..routers.db_router import fetch_daily_summary, get_audio_segment_from_audio_path
@@ -33,7 +31,6 @@ async def collate_summaries(user):
             intro_generator = output_speech(None, f"{name} says")
             intro_bytes = b"".join(intro_generator)
             intro_seg = AudioSegment.from_file(io.BytesIO(intro_bytes), format="ogg")
-
             summary = await get_audio_segment_from_audio_path(note[0]["audioPath"])
 
 
