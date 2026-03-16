@@ -1,10 +1,10 @@
 # Echo
-Our submission to ![SotonHack 2026](https://sotonhack.org/), winning the "Best use of ElevenLabs" track.
+Our submission to [SotonHack 2026](https://sotonhack.org/), winning the "Best use of ElevenLabs" track.
 
 Echo is a voice-based social media, bridging the semi-anonymous forum style of Reddit and Quora with the daily interaction between friends seen in BeReal.
 
 Users interact with the app through a voice of their choosing from ElevenLabs, and can ask or answer public questions, create daily notes for friends and more! Friends hear each other's actual daily voice recordings, whereas public forum answers are read in each user's chosen voice for anonymity.
-The forum questions shown for each user are determined by users' "interests" which they choose when registering, and are automatically updated from the type of questions they ask.
+The forum questions shown for each user are determined by their "interests" which they choose when registering, and are automatically updated from the type of questions they ask.
 
 We built the frontend with React and Tailwind, the backend with FastAPI in Python, and used ElevenLabs for voices, Gemini's API for text classification and MongoDB Atlas for storing our data.
 
@@ -45,7 +45,7 @@ To set up the frontend:
 You need 2 terminals, one for the fastapi server and one for the frontend.
 
 1. Backend terminal (from project root directory):
-  ```uv run --project backend uvicorn backend.main:app --reload```
+  ```uv run --project backend uvicorn backend.main:app```
 
 2. Frontend terminal (from `frontend` directory):
   ```npm run dev```
