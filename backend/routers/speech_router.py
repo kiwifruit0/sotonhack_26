@@ -3,6 +3,8 @@ from fastapi import APIRouter, Query
 from ..controllers.daily_summary_controller import collate_summaries, collate_forum_answers
 from .db_router import list_interests
 from fastapi.responses import StreamingResponse
+import httpx  
+import os  
 
 router = APIRouter()
 
@@ -103,3 +105,14 @@ async def text_to_speech(username, text):
         buff,
         media_type="audio/ogg",
     )
+
+@router.post("/speech-to-text")
+async def speech_to_text(file: UploadFile = File(...)):
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.elevenlabs.io/v1/speech-to-text",
+            headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]},
+            files={"file": (file.filename, await file.read(), file.content_type)},
+            data={"model_id": "scribe_v1"},
+        )
+    return response.json()

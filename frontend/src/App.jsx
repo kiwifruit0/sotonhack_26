@@ -1106,31 +1106,6 @@ const ForumTab = ({ currentUser }) => {
   );
 };
 
-// --- 11. Daily Summary Prompt ---
-const DailySummaryPrompt = ({ onYes, onNo }) => (
-  <AnimatePresence>
-    <motion.div className="summary-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}>
-      <motion.div className="summary-card" initial={{ opacity: 0, y: 32, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.97 }} transition={{ type: 'spring', stiffness: 320, damping: 28, delay: 0.05 }}>
-        <div className="summary-ring" aria-hidden />
-        <motion.div className="summary-icon" initial={{ scale: 0.7, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 400, damping: 20, delay: 0.15 }}>
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-            <line x1="12" y1="19" x2="12" y2="23"/>
-            <line x1="8" y1="23" x2="16" y2="23"/>
-          </svg>
-        </motion.div>
-        <motion.h3 className="summary-title" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>Daily Summary</motion.h3>
-        <motion.p className="summary-body" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.27 }}>Would you like to hear your daily summary?</motion.p>
-        <motion.div className="summary-actions" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.34 }}>
-          <motion.button className="summary-btn summary-btn--yes" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={onYes}>Yes, play it</motion.button>
-          <motion.button className="summary-btn summary-btn--no" whileHover={{ scale: 1.04, y: -1 }} whileTap={{ scale: 0.96 }} onClick={onNo}>Not now</motion.button>
-        </motion.div>
-      </motion.div>
-    </motion.div>
-  </AnimatePresence>
-);
-
 const ProfileTab = ({ currentUser }) => {
   const [userInterests, setUserInterests] = useState([]);
   const [allInterests, setAllInterests] = useState([]);
@@ -1708,11 +1683,10 @@ const App = () => {
             const formData = new FormData();
             formData.append('file', audioBlob, 'recording.webm');
             formData.append('model_id', 'scribe_v1');
-            const sttResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+            const sttResponse = await fetch('http://127.0.0.1:8000/speech-to-text', {
               method: 'POST',
-              headers: { 'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY },
-              body: formData,
-            });
+              body: formData,  // no auth header — backend handles it
+            })
             if (!sttResponse.ok) throw new Error('STT request failed');
             const sttData = await sttResponse.json();
             setTranscript(sttData.text);
@@ -1857,9 +1831,8 @@ const App = () => {
           const formData = new FormData();
           formData.append('file', blob, 'response.webm');
           formData.append('model_id', 'scribe_v1');
-          const sttRes = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+          const sttRes = await fetch('http://127.0.0.1:8000/speech-to-text', {
             method: 'POST',
-            headers: { 'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY },
             body: formData,
           });
           if (!sttRes.ok) throw new Error('STT failed');
@@ -1988,9 +1961,8 @@ const App = () => {
     const formData = new FormData();
     formData.append('file', blob, filename);
     formData.append('model_id', 'scribe_v1');
-    const sttRes = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    const sttRes = await fetch('http://127.0.0.1:8000/speech-to-text', {
       method: 'POST',
-      headers: { 'xi-api-key': import.meta.env.VITE_ELEVENLABS_API_KEY },
       body: formData,
     });
     if (!sttRes.ok) {
