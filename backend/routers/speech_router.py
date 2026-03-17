@@ -1,5 +1,5 @@
 from ..controllers.speech_controller import call_gemini, output_speech
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, File, UploadFile
 from ..controllers.daily_summary_controller import collate_summaries, collate_forum_answers
 from .db_router import list_interests
 from fastapi.responses import StreamingResponse
