@@ -44,8 +44,8 @@ To set up the frontend:
 ### Running the App
 You need 2 terminals, one for the fastapi server and one for the frontend.
 
-1. Backend terminal (from project root directory):
-  ```uv run --project backend uvicorn backend.main:app```
+1. Backend terminal (from `backend` directory):
+  ```uv run uvicorn main:app --reload```
 
 2. Frontend terminal (from `frontend` directory):
   ```npm run dev```
